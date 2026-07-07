@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>BojioVenue — House Rules</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --lavender: #F3EFFE;
+    --lavender-deep: #7B6FD6;
+    --coral: #FF8FAB;
+    --mint: #B5EDD5;
+    --ink: #2E2A4A;
+    --ink-soft: #5A5578;
+    --paper: #FFFFFF;
+    --warn-bg: #FFF4E0;
+    --warn-border: #F5A623;
+    --warn-ink: #8A5A00;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--lavender);
+    color: var(--ink);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 820px; margin: 0 auto; padding: 32px 20px 80px; }
+
+  header.top { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+  .logo-mark { width: 44px; height: 44px; border-radius: 12px; background: var(--ink); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .logo-mark svg { width: 28px; height: 28px; }
+  .brand-name { font-family: 'Plus Jakarta Sans', sans-serif; font-weight: 800; font-size: 20px; color: var(--ink); line-height: 1.1; }
+  .brand-sub { font-size: 12px; color: var(--ink-soft); letter-spacing: 0.02em; }
+
+  h1 { font-family: 'Plus Jakarta Sans', sans-serif; font-weight: 800; font-size: 34px; letter-spacing: -0.02em; margin: 28px 0 6px; color: var(--ink); }
+  .intro { font-size: 15px; color: var(--ink-soft); margin-bottom: 24px; max-width: 60ch; }
+
+  .banner {
+    background: var(--warn-bg);
+    border: 2px solid var(--warn-border);
+    border-radius: 16px;
+    padding: 20px 22px;
+    margin-bottom: 32px;
+  }
+  .banner .banner-title {
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-weight: 800;
+    font-size: 15px;
+    color: var(--warn-ink);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+  }
+  .banner p { font-size: 14.5px; color: #6B4600; margin-bottom: 8px; }
+  .banner p:last-child { margin-bottom: 0; }
+  .banner .split-table {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-top: 12px;
+  }
+  .banner .split-col {
+    background: rgba(255,255,255,0.55);
+    border-radius: 10px;
+    padding: 12px 14px;
+  }
+  .banner .split-col .split-label {
+    font-weight: 700;
+    font-size: 12.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--warn-ink);
+    margin-bottom: 4px;
+  }
+  .banner .split-col .split-val { font-size: 14px; color: #4A3200; }
+
+  nav.toc {
+    background: var(--paper);
+    border-radius: 16px;
+    padding: 18px 20px;
+    margin-bottom: 32px;
+  }
+  nav.toc .toc-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--lavender-deep); margin-bottom: 10px; }
+  nav.toc a {
+    display: block;
+    font-size: 14.5px;
+    color: var(--ink-soft);
+    text-decoration: none;
+    padding: 5px 0;
+    border-bottom: 1px dashed rgba(46,42,74,0.1);
+  }
+  nav.toc a:last-child { border-bottom: none; }
+  nav.toc a:hover { color: var(--lavender-deep); }
+
+  section.rule-block {
+    background: var(--paper);
+    border-radius: 18px;
+    padding: 24px 26px;
+    margin-bottom: 18px;
+    scroll-margin-top: 20px;
+  }
+  section.rule-block h2 {
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--lavender-deep);
+    margin-bottom: 12px;
+  }
+  section.rule-block p, section.rule-block li { font-size: 14.5px; color: var(--ink-soft); margin-bottom: 8px; }
+  section.rule-block ul { padding-left: 20px; margin: 6px 0 10px; }
+  section.rule-block li { margin-bottom: 4px; }
+  section.rule-block strong { color: var(--ink); }
+
+  .exception-tag {
+    display: inline-block;
+    background: var(--coral);
+    color: white;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    padding: 3px 9px;
+    border-radius: 999px;
+    margin-left: 8px;
+    vertical-align: middle;
+  }
+
+  .fine-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 10px 0 14px;
+    font-size: 14px;
+  }
+  .fine-table th {
+    text-align: left;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--lavender-deep);
+    padding: 6px 8px;
+    border-bottom: 1px solid rgba(46,42,74,0.12);
+  }
+  .fine-table td {
+    padding: 8px;
+    border-bottom: 1px solid rgba(46,42,74,0.07);
+    color: var(--ink-soft);
+  }
+  .fine-table tr:last-child td { border-bottom: none; }
+  .fine-table td.amt { color: var(--ink); font-weight: 700; text-align: right; }
+
+  .split-inline {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin: 10px 0 14px;
+  }
+  .split-inline .split-card {
+    background: var(--lavender);
+    border-radius: 10px;
+    padding: 12px 14px;
+  }
+  .split-inline .split-card .lbl { font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--lavender-deep); margin-bottom: 4px; }
+  .split-inline .split-card .val { font-size: 14px; color: var(--ink); }
+
+  .amenity-group { margin-bottom: 16px; }
+  .amenity-group h3 {
+    font-size: 13px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--ink);
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .amenity-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .amenity-item {
+    background: var(--mint);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 13.5px;
+    display: flex;
+    justify-content: space-between;
+  }
+  .amenity-item .price { font-weight: 700; }
+  .amenity-item.entertainment { background: #FFE0EA; }
+
+  footer.contact {
+    text-align: center;
+    padding: 24px 0 8px;
+    font-size: 13px;
+    color: var(--ink-soft);
+  }
+  footer.contact a { color: var(--lavender-deep); font-weight: 600; text-decoration: none; }
+
+  @media (max-width: 480px) {
+    h1 { font-size: 26px; }
+    .banner .split-table, .amenity-grid, .split-inline { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div class="logo-mark">
+      <svg viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg"><g fill="#F3EFFE"><circle cx="200" cy="180" r="160" /><polygon points="115,300 95,360 185,335" /><polygon points="180,330 320,385 320,365 180,310" /></g><rect x="155" y="115" width="100" height="160" fill="#2E2A4A" /><circle cx="240" cy="195" r="9" fill="#F3EFFE" /></svg>
+    </div>
+    <div>
+      <div class="brand-name">BojioVenue</div>
+      <div class="brand-sub">81 Tagore Lane #03-20, Singapore 787502</div>
+    </div>
+  </header>
+
+  <h1>House Rules</h1>
+  <p class="intro">These rules apply to all bookings at BojioVenue. The Host is responsible for ensuring all guests, vendors, and service providers comply with these rules at all times.</p>
+
+  <div class="banner">
+    <div class="banner-title">⚠️ Read this first — access &amp; overtime differ by booking type</div>
+    <p>Entertainment Hall &amp; KTV Room access and overtime rates depend on whether you booked the <strong>Whole Venue</strong> or the <strong>Main Hall Only (Seminar/Training, Mon–Thu)</strong>. Check your booking confirmation to see which applies to you.</p>
+    <div class="split-table">
+      <div class="split-col">
+        <div class="split-label">Whole Venue</div>
+        <div class="split-val">✅ Entertainment Hall &amp; KTV Room included<br>Overtime: $150/hr (Mon–Thu) · $180/hr (Fri–Sun, PH &amp; PH Eve)</div>
+      </div>
+      <div class="split-col">
+        <div class="split-label">Main Hall Only (Seminar/Training)</div>
+        <div class="split-val">🚫 Entertainment Hall &amp; KTV Room NOT included — $250 fine if used<br>Overtime: flat $90/hr</div>
+      </div>
+    </div>
+  </div>
+
+  <nav class="toc">
+    <div class="toc-title">Jump to a section</div>
+    <a href="#s1">1. Booking Time &amp; Venue Access</a>
+    <a href="#s2">2. Guest &amp; Vendor Responsibility</a>
+    <a href="#s3">3. Compliance With Building &amp; Management Rules</a>
+    <a href="#s4">4. Venue &amp; Facilities Use</a>
+    <a href="#s5">5. Noise &amp; Neighbours</a>
+    <a href="#s6">6. Food &amp; Drinks</a>
+    <a href="#s7">7. Vendors &amp; Décor</a>
+    <a href="#s8">8. Cleaning &amp; Waste Disposal</a>
+    <a href="#s9">9. Smoking, Vaping &amp; Illegal Activities</a>
+    <a href="#s10">10. Lost &amp; Found</a>
+    <a href="#s11">11. Safety &amp; Emergency</a>
+    <a href="#s12">12. Right of Entry</a>
+    <a href="#s13">13. Enforcement &amp; Final Authority</a>
+    <a href="#fines">Fines &amp; Penalties</a>
+    <a href="#amenity">Amenity &amp; Damage-Cost List</a>
+  </nav>
+
+  <section class="rule-block" id="s1">
+    <h2>1. Booking Time &amp; Venue Access</h2>
+    <p>1.1 The booking time includes setup and teardown. All activities, packing, and vacating of the Venue must be completed within the booked hours unless otherwise stated in the Agreement.</p>
+    <p>1.2 Any stay beyond the booked time may result in overtime charges, deductions, or enforcement actions as outlined in the Agreement.</p>
+  </section>
+
+  <section class="rule-block" id="s2">
+    <h2>2. Guest &amp; Vendor Responsibility</h2>
+    <p>2.1 The Host is fully responsible for the conduct, safety, and behaviour of all guests, vendors, and service providers present at the Venue.</p>
+    <p>2.2 Any damage, loss, excessive mess, rule breach, or misconduct caused by guests or vendors shall be deemed the responsibility of the Host.</p>
+    <p>2.3 Children and pets are permitted only under close supervision at all times.</p>
+  </section>
+
+  <section class="rule-block" id="s3">
+    <h2>3. Compliance With Building &amp; Management Rules</h2>
+    <p>3.1 The Host and all attendees must comply with all building management rules, regulations, and guidelines applicable to the premises.</p>
+    <p>3.2 Any breach of building or management rules, including actions that result in complaints or enforcement by building management or neighbouring occupants, shall be treated as a breach of these House Rules.</p>
+  </section>
+
+  <section class="rule-block" id="s4">
+    <h2>4. Venue &amp; Facilities Use</h2>
+    <p>4.1 All facilities, furniture, and equipment provided must be used responsibly and only for their intended purpose.</p>
+    <p>4.2 Furniture and equipment must be returned to their original positions before departure.</p>
+    <p>4.3 All lights, air-conditioning units, water taps, and electrical appliances must be switched off after use.</p>
+    <p>4.4 Any misuse, negligence, or unauthorised tampering with equipment may result in repair, replacement, or cleaning charges.</p>
+    <p>4.5 <strong>Entertainment Hall &amp; KTV Room</strong> <span class="exception-tag">Main Hall bookings only</span><br>
+    For Main Hall Only (Seminar/Training) bookings: the Entertainment Hall and KTV Room are NOT included in your booking. Do not access these areas at any time — a $250 fine applies. Whole Venue bookings include full access to both areas.</p>
+  </section>
+
+  <section class="rule-block" id="s5">
+    <h2>5. Noise &amp; Neighbours</h2>
+    <p>5.1 Doors must remain closed during karaoke, music playback, or use of amplified sound.</p>
+    <p>5.2 The Venue reserves the right to reduce volume levels or terminate the event immediately without refund if noise complaints, disturbances, or enforcement actions occur.</p>
+  </section>
+
+  <section class="rule-block" id="s6">
+    <h2>6. Food &amp; Drinks</h2>
+    <p>6.1 Outside food and beverages are permitted.</p>
+    <p>6.2 Cooking, frying, use of open flames, or portable cooking appliances are strictly prohibited.</p>
+    <p>6.3 Alcohol consumption is permitted on a bring-your-own basis only. The sale or distribution of alcohol is strictly prohibited.</p>
+    <p>6.4 The Host is responsible for ensuring compliance with all applicable laws and regulations relating to alcohol consumption.</p>
+  </section>
+
+  <section class="rule-block" id="s7">
+    <h2>7. Vendors &amp; Décor</h2>
+    <p>7.1 External vendors such as caterers, decorators, entertainers, and equipment providers are allowed to the Venue.</p>
+    <p>7.2 All vendors must comply with the Venue's House Rules at all times.</p>
+    <p>7.3 Decorations must not cause damage to walls, ceilings, furniture, or fixtures. The following are strictly prohibited:</p>
+    <ul>
+      <li>Nails, screws, drilling, or permanent fixtures</li>
+      <li>Adhesive hooks, tapes, or materials that may damage surfaces</li>
+      <li>Confetti, glitter, or similar materials</li>
+    </ul>
+    <p>7.4 All decorations, equipment, and vendor items must be removed by the end of the booking period.</p>
+  </section>
+
+  <section class="rule-block" id="s8">
+    <h2>8. Cleaning &amp; Waste Disposal</h2>
+    <p>8.1 Standard cleaning is included in the booking and covers normal post-event cleaning only, including:</p>
+    <ul>
+      <li>Sweeping and mopping of floors</li>
+      <li>Wiping of tables, countertops, and commonly used surfaces</li>
+      <li>Basic restroom cleaning</li>
+    </ul>
+    <p>8.2 Standard cleaning does <strong>NOT</strong> include:</p>
+    <ul>
+      <li>Removal of rubbish left inside the Venue, pantry, toilets, or common areas</li>
+      <li>Removal of unbagged, loose, or overflowing trash</li>
+      <li>Removal of food waste, spillage, or liquids on floors, furniture, or equipment</li>
+      <li>Cleaning of stains requiring specialised treatment</li>
+      <li>Removal of decorations, balloons, tape, or adhesive residue</li>
+      <li>Cleaning resulting from pets, bodily fluids, or improper waste disposal</li>
+      <li>Removal, rearrangement, or restoration of furniture, tables, chairs, equipment, or venue layout not returned to their original positions before departure</li>
+    </ul>
+    <p>8.3 The Host is required to:</p>
+    <ul>
+      <li>Clear all leftover food and beverages</li>
+      <li>Bag and tie all rubbish securely</li>
+      <li>Remove all rubbish from the Venue and place it at the designated lift lobby disposal point</li>
+      <li>Ensure that all trash bins within the Venue are emptied and cleared before departure</li>
+    </ul>
+    <p>8.4 Any cleaning, manpower, reinstatement, or restoration work required beyond standard cleaning, including but not limited to rubbish left behind, additional mess, stains, odours, spills, improper disposal, or failure to return furniture and equipment to their original positions, shall be deemed excess cleaning and may result in additional charges or deductions as stated in the Agreement.</p>
+  </section>
+
+  <section class="rule-block" id="s9">
+    <h2>9. Smoking, Vaping &amp; Illegal Activities</h2>
+    <p>9.1 Smoking and vaping are strictly prohibited inside the Venue, outside the unit, and at neighbouring units or common areas.</p>
+    <p>9.2 Smoking is permitted only at the designated smoking area as informed by the Venue. Smoking at any other location is not allowed.</p>
+    <p>9.3 All cigarette waste must be disposed of properly. Littering is strictly prohibited.</p>
+    <p>9.4 Illegal activities of any kind, including but not limited to drug use, gambling, or unlawful conduct, are strictly prohibited.</p>
+    <p>9.5 The Host must ensure that the event complies with all applicable Singapore laws, regulations, licensing requirements, and safety guidelines.</p>
+    <p>9.6 Any illegal activity will be reported to the authorities. The Venue bears no responsibility or liability for such matters.</p>
+  </section>
+
+  <section class="rule-block" id="s10">
+    <h2>10. Lost &amp; Found</h2>
+    <p>10.1 The Venue is not responsible for any lost, stolen, or damaged personal belongings.</p>
+    <p>10.2 If any item is found, the Host will be notified.</p>
+    <p>10.3 Unclaimed items will be disposed of after seven (7) days.</p>
+  </section>
+
+  <section class="rule-block" id="s11">
+    <h2>11. Safety &amp; Emergency</h2>
+    <p>11.1 Emergency exits, access routes, and fire safety equipment must not be obstructed at any time.</p>
+    <p>11.2 The Host is responsible for ensuring the safety and well-being of all attendees during the event.</p>
+    <p>11.3 In the event of an emergency, all guests must comply with instructions issued by the Venue staff or emergency authorities.</p>
+  </section>
+
+  <section class="rule-block" id="s12">
+    <h2>12. Right of Entry</h2>
+    <p>12.1 The Venue reserves the right to enter the premises at any time during the booking for inspection, safety checks, maintenance, or emergency purposes.</p>
+    <p>12.2 Such entry shall not be deemed an interference with the booking.</p>
+  </section>
+
+  <section class="rule-block" id="s13">
+    <h2>13. Enforcement &amp; Final Authority</h2>
+    <p>13.1 Failure to comply with these House Rules may result in:</p>
+    <ul>
+      <li>Immediate termination of the event without refund</li>
+      <li>Deductions from the security deposit</li>
+      <li>Additional charges for damages, cleaning, or losses</li>
+    </ul>
+    <p>13.2 All enforcement actions, charges, and deductions shall be governed by the terms set out in the Agreement.</p>
+    <p>13.3 In the event of any dispute relating to the interpretation or enforcement of these House Rules, the Venue's decision shall be final.</p>
+  </section>
+
+  <section class="rule-block" id="fines">
+    <h2>Fines &amp; Penalties</h2>
+    <p style="margin-bottom: 14px;">This section sets out the fines and penalties applicable in the event of breaches of the House Rules. All fines and penalties listed below may be deducted from the security deposit, without prejudice to any additional claims under the Agreement.</p>
+
+    <p><strong>Utilities &amp; Facilities</strong></p>
+    <table class="fine-table">
+      <tr><th>Breach</th><th>Fine</th></tr>
+      <tr><td>Lights not switched off after event</td><td class="amt">$30 per switch</td></tr>
+      <tr><td>Air-conditioning units not switched off after event</td><td class="amt">$100 per unit</td></tr>
+      <tr><td>Entertainment Hall / KTV Room used <span class="exception-tag" style="margin-left:0;">Main Hall bookings only</span></td><td class="amt">$250</td></tr>
+    </table>
+
+    <p><strong>Cleaning &amp; Waste Disposal — Excessive Cleaning Fee: $250</strong></p>
+    <p>Excessive cleaning refers to cleaning required beyond standard cleaning, including but not limited to: rubbish left inside the Venue or not brought to the designated lift lobby; unbagged, loose, or overflowing trash; food waste, spills, stains, or strong odours; decorations, tape residue, balloons, or vendor items left behind; cleaning required due to pets, bodily fluids, or misuse of facilities; and manpower required to rearrange or restore furniture, tables, chairs, or equipment back to the Venue's original layout. This fee is not related to the standard cleaning fee already included in the booking and applies only when additional manpower, time, or specialised cleaning is required.</p>
+
+    <p style="margin-top:14px;"><strong>Smoking &amp; Littering</strong></p>
+    <table class="fine-table">
+      <tr><th>Breach</th><th>Fine</th></tr>
+      <tr><td>Cigarette butts found inside the Venue</td><td class="amt">$200</td></tr>
+      <tr><td>Cigarette butts found outside, at neighbouring units, or MCST/building management complaints</td><td class="amt">$300</td></tr>
+    </table>
+    <p>Smoking is permitted only at the designated smoking area. Smoking or littering at any other location constitutes a breach of House Rules.</p>
+
+    <p style="margin-top:14px;"><strong>Overtime Charges</strong> <span class="exception-tag">Rates differ by booking type</span></p>
+    <div class="split-inline">
+      <div class="split-card">
+        <div class="lbl">Whole Venue</div>
+        <div class="val">Mon–Thu: $150/hr<br>Fri–Sun, PH &amp; PH Eve: $180/hr</div>
+      </div>
+      <div class="split-card">
+        <div class="lbl">Main Hall Only (Seminar/Training)</div>
+        <div class="val">Flat rate: $90/hr</div>
+      </div>
+    </div>
+    <p>Overtime charges apply regardless of reason, including delayed packing, late guest departure, or vendor overrun. Charged per hour or part thereof, after any grace period stated in the Agreement.</p>
+
+    <p style="margin-top:14px;"><strong>General Enforcement</strong></p>
+    <ul>
+      <li>All fines and penalties are non-negotiable once verified.</li>
+      <li>CCTV footage, photographs, time logs, and on-site inspections shall be deemed valid evidence.</li>
+      <li>If the total fines or charges exceed the security deposit, the Host shall be required to top up the balance within the timeframe stated in the Agreement.</li>
+    </ul>
+
+    <p style="margin-top:14px;"><strong>Police Activation &amp; Deposit Forfeiture</strong></p>
+    <p>If the police or any enforcement authority is activated or attends the Venue due to noise complaints, illegal activities, disorderly conduct, or any breach of the House Rules caused by the Host, guests, or vendors, the full security deposit shall be forfeited. This applies regardless of the duration of police attendance or whether the event is subsequently allowed to continue.</p>
+  </section>
+
+  <section class="rule-block" id="amenity">
+    <h2>Amenity &amp; Damage-Cost List</h2>
+    <p style="margin-bottom: 14px;">Please take care of our things — mics, game equipment, chairs, cables, remote controls, and so on. If it's broken, replacement cost applies. Below are the replacement costs by area.</p>
+
+    <div class="amenity-group">
+      <h3>Main Hall + Pantry <span style="font-weight:400; text-transform:none; font-size:12px; color:var(--ink-soft);">— all bookings</span></h3>
+      <div class="amenity-grid">
+        <div class="amenity-item"><span>Prism+ 65" TV</span><span class="price">$650</span></div>
+        <div class="amenity-item"><span>Amplifier</span><span class="price">$450</span></div>
+        <div class="amenity-item"><span>Dining Table</span><span class="price">$700/pc</span></div>
+        <div class="amenity-item"><span>Dining Chair</span><span class="price">$25/pc</span></div>
+        <div class="amenity-item"><span>Foldable Table</span><span class="price">$100/pc</span></div>
+        <div class="amenity-item"><span>Fridge</span><span class="price">$750</span></div>
+        <div class="amenity-item"><span>Water Dispenser</span><span class="price">$1288</span></div>
+        <div class="amenity-item"><span>Microwave</span><span class="price">$100</span></div>
+        <div class="amenity-item"><span>Microphone</span><span class="price">$100/pc</span></div>
+        <div class="amenity-item"><span>Kitchen Set Toy</span><span class="price">$150</span></div>
+        <div class="amenity-item"><span>Board Game (each)</span><span class="price">$35</span></div>
+        <div class="amenity-item"><span>Stool</span><span class="price">$12/pc</span></div>
+      </div>
+    </div>
+
+    <div class="amenity-group">
+      <h3>Karaoke Room <span class="exception-tag">Whole Venue only</span></h3>
+      <div class="amenity-grid">
+        <div class="amenity-item entertainment"><span>HiSense 65" TV</span><span class="price">$600</span></div>
+        <div class="amenity-item entertainment"><span>KTV System</span><span class="price">$950</span></div>
+        <div class="amenity-item entertainment"><span>Outdoor Chair (Big)</span><span class="price">$80/pc</span></div>
+        <div class="amenity-item entertainment"><span>Outdoor Chair (Small)</span><span class="price">$80/pc</span></div>
+        <div class="amenity-item entertainment"><span>Round Table</span><span class="price">$100</span></div>
+        <div class="amenity-item entertainment"><span>Camping Light</span><span class="price">$15/pc</span></div>
+        <div class="amenity-item entertainment"><span>LED Signage</span><span class="price">$80/pc</span></div>
+        <div class="amenity-item entertainment"><span>Cushion</span><span class="price">$15/pc</span></div>
+      </div>
+    </div>
+
+    <div class="amenity-group">
+      <h3>Entertainment Area @ Level 2 <span class="exception-tag">Whole Venue only</span></h3>
+      <div class="amenity-grid">
+        <div class="amenity-item entertainment"><span>Electronic Darts</span><span class="price">$200</span></div>
+        <div class="amenity-item entertainment"><span>Pool Table</span><span class="price">$800</span></div>
+        <div class="amenity-item entertainment"><span>Pool Cue (per stick)</span><span class="price">$50</span></div>
+        <div class="amenity-item entertainment"><span>Arcade Game</span><span class="price">$800</span></div>
+        <div class="amenity-item entertainment"><span>High Table</span><span class="price">$300</span></div>
+        <div class="amenity-item entertainment"><span>High Chair</span><span class="price">$25/pc</span></div>
+        <div class="amenity-item entertainment"><span>Arcade Game Chair</span><span class="price">$80/pc</span></div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="contact">
+    Questions? WhatsApp us at <a href="https://wa.me/6585099176">+65 8509 9176</a>
+  </footer>
+
+</div>
+</body>
+</html>
