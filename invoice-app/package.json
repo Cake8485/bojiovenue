@@ -1,0 +1,20 @@
+{
+  "name": "bojiovenue-invoice",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "BojioVenue invoice/receipt generator + agreement generator (Cloudflare Worker)",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:create": "wrangler d1 create bojiovenue-invoice",
+    "db:init": "wrangler d1 execute bojiovenue-invoice --remote --file=./schema.sql",
+    "db:init:local": "wrangler d1 execute bojiovenue-invoice --local --file=./schema.sql"
+  },
+  "dependencies": {
+    "pdf-lib": "^1.17.1"
+  },
+  "devDependencies": {
+    "wrangler": "^4.110.0"
+  }
+}

@@ -1,0 +1,15 @@
+# Local-only secrets for `wrangler dev`. Copy this file to `.dev.vars` and fill in.
+# NEVER commit `.dev.vars` (it's in .gitignore). In production these are set with
+# `wrangler secret put NAME` instead — see README.
+
+# Password gate for the /admin page + admin API. Make it a long random string.
+ADMIN_KEY="change-me-to-a-long-random-string"
+
+# Google Drive OAuth (filled during the OAuth setup step in the README).
+GOOGLE_CLIENT_ID=""
+GOOGLE_CLIENT_SECRET=""
+GOOGLE_REFRESH_TOKEN=""
+
+# Telegram notification (optional — leave blank to disable notifications).
+TELEGRAM_BOT_TOKEN=""
+TELEGRAM_CHAT_ID=""

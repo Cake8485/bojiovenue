@@ -1,0 +1,38 @@
+# Cloudflare Worker configuration for BojioVenue.
+# Docs: https://developers.cloudflare.com/workers/wrangler/configuration/
+
+name = "bojiovenue-invoice"
+main = "src/worker.js"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# ---------------------------------------------------------------------------
+# D1 database (Cloudflare's built-in SQLite — free tier, no extra service).
+# Run `npm run db:create` once, then paste the printed database_id below.
+# ---------------------------------------------------------------------------
+[[d1_databases]]
+binding = "DB"
+database_name = "bojiovenue-invoice"
+database_id = "9802d057-759b-4395-b3e1-391a882cfd44"
+
+# ---------------------------------------------------------------------------
+# Non-secret config. (Secrets like API keys go in `wrangler secret put`,
+# NOT here — see README.)
+# ---------------------------------------------------------------------------
+[vars]
+# Public base URL of this Worker. Used to build client signing links.
+# Placeholder until the invoice.bojiovenue.com custom domain is attached
+# during deploy — until then, wrangler will print a real *.workers.dev URL
+# to use here for local/testing purposes.
+PUBLIC_BASE_URL = "https://invoice.bojiovenue.com"
+
+# Google Drive: ID of the PARENT folder that month folders (2026-07, ...)
+# get created under. You'll fill this during the OAuth setup step.
+DRIVE_PARENT_FOLDER_ID = "10l7RM0MHCHbgM_-rJ3uQwAknQSY-eRXp"
+
+# Business identity (printed on the invoice/receipt).
+BUSINESS_NAME     = "BojioVenue"
+BUSINESS_OPERATOR = "Kenneth Lu"
+BUSINESS_ENTITY   = "Novan Management"
+BUSINESS_UEN      = "53513299M"
+BUSINESS_ADDRESS  = "81 Tagore Lane #03-20, Singapore 787502"
