@@ -1961,5 +1961,189 @@
       window.open(`https://wa.me/6585099176?text=${encodeURIComponent(text)}`, '_blank');
     }
   </script>
+
+<!-- ===== BojioVenue 1st Anniversary Promo Popup (Aug 2026) ===== -->
+<style>
+  :root{
+    --lavender:#F3EFFE;
+    --lavender-deep:#E4DAFB;
+    --coral:#FF8FAB;
+    --coral-deep:#F2678F;
+    --mint:#B5EDD5;
+    --plum:#5B3A87;
+    --plum-deep:#432866;
+    --ink:#2B2140;
+    --paper:#FFFDFB;
+  }
+
+  /* ===== Popup ===== */
+  .bojio-overlay{
+    position:fixed;
+    inset:0;
+    background:rgba(43,33,64,0.55);
+    backdrop-filter:blur(3px);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    z-index:9999;
+    padding:20px;
+    animation:overlayIn .35s ease both;
+  }
+  @keyframes overlayIn{from{opacity:0} to{opacity:1}}
+
+  .bojio-card{
+    position:relative;
+    width:100%;
+    max-width:440px;
+    max-height:92vh;
+    overflow-y:auto;
+    background:var(--paper);
+    border-radius:28px;
+    box-shadow:0 24px 60px rgba(67,40,102,0.35);
+    animation:cardIn .45s cubic-bezier(.2,.9,.25,1.1) both;
+  }
+  @keyframes cardIn{
+    from{opacity:0; transform:translateY(18px) scale(.96);}
+    to{opacity:1; transform:translateY(0) scale(1);}
+  }
+  @media (prefers-reduced-motion: reduce){
+    .bojio-overlay, .bojio-card{animation:none;}
+  }
+
+  .bojio-close{
+    position:absolute;
+    top:12px;
+    right:12px;
+    width:32px;
+    height:32px;
+    border-radius:50%;
+    border:none;
+    background:rgba(43,33,64,0.55);
+    color:#fff;
+    font-size:18px;
+    line-height:1;
+    cursor:pointer;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    z-index:2;
+    transition:background .15s ease;
+  }
+  .bojio-close:hover{background:rgba(43,33,64,0.8);}
+  .bojio-close:focus-visible{outline:2px solid var(--mint); outline-offset:2px;}
+
+  .bojio-sr-only{
+    position:absolute;
+    width:1px; height:1px;
+    padding:0; margin:-1px;
+    overflow:hidden;
+    clip:rect(0,0,0,0);
+    white-space:nowrap;
+    border:0;
+  }
+
+  .bojio-art{
+    display:block;
+    width:100%;
+    height:auto;
+    border-radius:28px 28px 0 0;
+  }
+
+  .bojio-body{padding:18px 22px 22px;}
+
+  .bojio-cta{
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    gap:8px;
+    width:100%;
+    border:none;
+    border-radius:14px;
+    padding:15px 18px;
+    background:linear-gradient(120deg, var(--coral) 0%, var(--coral-deep) 100%);
+    color:#fff;
+    font-family:'Plus Jakarta Sans', sans-serif;
+    font-weight:700;
+    font-size:15px;
+    cursor:pointer;
+    text-decoration:none;
+    box-shadow:0 10px 24px rgba(242,103,143,0.35);
+    transition:transform .15s ease, box-shadow .15s ease;
+  }
+  .bojio-cta:hover{transform:translateY(-1px); box-shadow:0 14px 28px rgba(242,103,143,0.42);}
+  .bojio-cta:focus-visible{outline:2px solid var(--plum); outline-offset:3px;}
+  .bojio-cta svg{flex:0 0 auto;}
+
+  .bojio-fine{
+    margin:14px 0 0;
+    font-size:11px;
+    line-height:1.5;
+    color:#8B7DA6;
+    text-align:center;
+  }
+
+  .bojio-later{
+    display:block;
+    text-align:center;
+    margin-top:10px;
+    font-size:12.5px;
+    color:#9385B0;
+    background:none;
+    border:none;
+    cursor:pointer;
+    text-decoration:underline;
+    text-underline-offset:2px;
+    width:100%;
+    font-family:'DM Sans', sans-serif;
+  }
+</style>
+<div class="bojio-overlay" id="bojioPromoOverlay">
+  <div class="bojio-card" role="dialog" aria-modal="true" aria-labelledby="bojioPromoTitle">
+    <button class="bojio-close" id="bojioPromoClose" aria-label="Close promotion popup">&times;</button>
+
+    <h2 id="bojioPromoTitle" class="bojio-sr-only">BojioVenue 1st Anniversary Promotion — August</h2>
+
+    <img
+      class="bojio-art"
+      src="bojio-1st-anniversary-promo.jpg"
+      alt="BojioVenue 1st Anniversary Celebration — SG61 x BoJio Turns One. Whole month of August: Gift 1, 10% off all booking packages. Gift 2, cleaning fee only $61 (usual $80). Gift 3, book 8 hours or more and get an extra $61 off. Save up to $200. Min 4 hours booking required, subject to availability, $500 refundable deposit, terms and conditions apply."
+    >
+
+    <div class="bojio-body">
+      <a class="bojio-cta" id="bojioPromoCta" href="https://wa.me/6585099176?text=Hi%20BojioVenue!%20I'm%20interested%20in%20the%201st%20Anniversary%20promo%20for%20August." target="_blank" rel="noopener">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2.05 22l5.25-1.38a9.9 9.9 0 0 0 4.74 1.21h.01c5.46 0 9.91-4.45 9.91-9.91 0-2.65-1.03-5.14-2.9-7.01A9.86 9.86 0 0 0 12.04 2m0 1.67c2.24 0 4.35.87 5.94 2.46a8.24 8.24 0 0 1 2.42 5.85c0 4.56-3.71 8.27-8.37 8.27a8.3 8.3 0 0 1-4.22-1.15l-.3-.18-3.12.82.83-3.04-.2-.31a8.2 8.2 0 0 1-1.27-4.4c0-4.56 3.72-8.32 8.29-8.32M8.53 7.33c-.16 0-.43.06-.66.31-.22.25-.86.84-.86 2.05s.88 2.38 1 2.54c.13.17 1.71 2.72 4.23 3.71 2.09.83 2.52.66 2.97.62.45-.04 1.46-.6 1.66-1.17.21-.58.21-1.08.15-1.18-.06-.1-.23-.16-.48-.28-.25-.13-1.46-.72-1.68-.8-.23-.08-.39-.13-.56.13-.16.25-.64.8-.78.97-.15.16-.29.18-.54.06-.25-.13-1.05-.39-2-1.23-.74-.66-1.24-1.48-1.39-1.73-.14-.25-.01-.38.11-.51.12-.11.25-.29.38-.44.13-.14.17-.25.25-.41.08-.17.04-.31-.02-.44-.06-.13-.56-1.36-.78-1.86-.2-.48-.41-.42-.56-.43z"/></svg>
+        Chat on WhatsApp to Book
+      </a>
+      <button class="bojio-later" id="bojioPromoLater">Maybe later</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  // Only run through the promo window: today through 31 Aug 2026 (SGT-ish, using local date is fine for this use case)
+  var promoEnd = new Date('2026-09-01T00:00:00');
+  if (new Date() >= promoEnd) return;
+
+  var overlay = document.getElementById('bojioPromoOverlay');
+  if (!overlay) return;
+
+  function closePopup(){
+    overlay.style.display = 'none';
+  }
+
+  document.getElementById('bojioPromoClose').addEventListener('click', closePopup);
+  document.getElementById('bojioPromoLater').addEventListener('click', closePopup);
+
+  overlay.addEventListener('click', function(e){
+    if (e.target === overlay) closePopup();
+  });
+
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape') closePopup();
+  });
+})();
+</script>
+<!-- ===== END Anniversary Promo Popup ===== -->
 </body>
 </html>
