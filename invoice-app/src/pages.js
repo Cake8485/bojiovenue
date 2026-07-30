@@ -25,9 +25,12 @@ export function signPage(env, token) {
  button{background:#111;color:#fff;border:0;border-radius:10px;padding:14px;font-size:16px;width:100%;margin-top:12px;cursor:pointer}
  button.sec{background:#ececef;color:#333;padding:8px 14px;font-size:13px;width:auto;margin-top:8px}
  #msg{margin-top:10px;font-size:13px}
- .agreement{max-height:420px;overflow-y:auto;border:1px solid #e6e6ea;border-radius:10px;padding:4px 16px;background:#fafafa}
- .agreement h3{font-size:13px;margin:16px 0 6px;color:#16161a}
- .agreement p{font-size:12.5px;line-height:1.5;color:#3a3a40;margin:0 0 8px}
+ .agreement{max-height:460px;overflow-y:auto;border-radius:10px;padding:14px;background:#93C6D9}
+ .agreement .a-card{background:#FFDE58;border-radius:10px;padding:12px 16px;margin:0 0 10px}
+ .agreement h3{font-size:12.5px;margin:0 0 6px;color:#2F0B5D;font-weight:700}
+ .agreement p{font-size:11.5px;line-height:1.5;color:#2F0B5D;margin:0 0 7px}
+ .agreement p.a-bold{font-weight:700}
+ .agreement p:last-child{margin-bottom:0}
 </style></head>
 <body><div class="wrap"><div id="app" class="muted" style="padding:28px;text-align:center">Loading…</div></div>
 <script>
@@ -169,6 +172,17 @@ export function adminPage(env) {
      <div><label>Discount / promo <span class="muted">(e.g. "10% off", "$50 off" — leave blank for none)</span></label><input id="discount_note"></div>
      <div><label>Notes</label><input id="notes"></div>
    </div>
+
+   <h2 style="margin-top:18px">Promo labels &amp; custom clause <span class="muted">(all optional)</span></h2>
+   <p class="muted" style="margin:0 0 8px">Use these when a manually-overridden rate above is a named promo (e.g. set Hourly rate/Cleaning fee/Deposit above to the promo amount, then label it here — this does not change any pricing itself, just what's shown on the Agreement).</p>
+   <div class="grid">
+     <div><label>Rental fee label</label><input id="rental_fee_note" placeholder='e.g. "SG61 x BoJio Turns One Promo"'></div>
+     <div><label>Cleaning fee label</label><input id="cleaning_fee_note" placeholder='e.g. "SG61 Promo"'></div>
+     <div><label>Deposit label</label><input id="deposit_note"></div>
+     <div><label>Custom clause title <span class="muted">(inserted as its own numbered clause after Cancellation)</span></label><input id="promo_clause_title" placeholder="e.g. Special Promotion Terms – SG61 x BoJio Turns One Promo"></div>
+   </div>
+   <div style="margin-top:8px"><label>Custom clause text</label><textarea id="promo_clause_text" rows="3" style="width:100%;padding:9px;border:1px solid #cfcfd6;border-radius:8px;font-size:14px;font-family:inherit"></textarea></div>
+
    <div style="margin-top:12px"><button id="create">Create invoice</button> <span id="createMsg" class="muted"></span></div>
  </div>
 
@@ -245,7 +259,10 @@ document.getElementById('create').onclick=async()=>{
     event_type:val('event_type'),venue_space:val('venue_space'),booking_date:val('booking_date'),hours:val('hours'),
     start_time:val('start_time'),end_time:val('end_time'),
     hourly_rate:val('hourly_rate'),cleaning_fee:val('cleaning_fee'),deposit_amount:val('deposit_amount'),
-    pet_fee:document.getElementById('has_pet').checked?100:0,discount_text:val('discount_note'),notes:val('notes')};
+    pet_fee:document.getElementById('has_pet').checked?100:0,discount_text:val('discount_note'),
+    rental_fee_note:val('rental_fee_note'),cleaning_fee_note:val('cleaning_fee_note'),deposit_note:val('deposit_note'),
+    promo_clause_title:val('promo_clause_title'),promo_clause_text:val('promo_clause_text'),
+    notes:val('notes')};
   const r=await api('/api/invoices',{method:'POST',body:JSON.stringify(body)});
   const d=await r.json().catch(()=>({}));
   if(r.ok){ msg.textContent=d.invoice.invoice_no+' created.'; await copy(d.signing_url); toast(d.invoice.invoice_no+' created — signing link copied to clipboard.'); load(); }

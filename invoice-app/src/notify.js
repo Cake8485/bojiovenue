@@ -3,12 +3,18 @@
 // Written so a second channel (e.g. email via Resend) can be dropped in without
 // touching callers.
 
+// filed: { agreement, bookingInvoice, depositInvoice } — each either a Drive
+// files.create response ({id, name, webViewLink}) or null if that document
+// failed to file. Includes the actual clickable Drive link per document, per
+// Kenneth's request, not just "which folder it's in."
 export async function notifySigned(env, invoice, filed = {}) {
   const month = (invoice.booking_date || "").slice(0, 7);
+  const docLine = (label, doc) =>
+    doc ? `  • ${label}: ${doc.webViewLink}` : `  • ${label} — FAILED to file, retry from admin`;
   const filedLines = [
-    filed.agreement ? "  • Agreement (signed)" : "  • Agreement — FAILED to file, retry from admin",
-    filed.bookingInvoice ? "  • Booking Invoice" : "  • Booking Invoice — FAILED to file, retry from admin",
-    filed.depositInvoice ? "  • Deposit Invoice" : "  • Deposit Invoice — FAILED to file, retry from admin",
+    docLine("Agreement", filed.agreement),
+    docLine("Booking Invoice", filed.bookingInvoice),
+    docLine("Deposit Invoice", filed.depositInvoice),
   ].join("\n");
   const text =
     `✅ ${invoice.invoice_no} signed by ${invoice.signer_name || invoice.client_name}\n` +

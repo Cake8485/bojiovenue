@@ -22,20 +22,24 @@ export async function createInvoice(env, d) {
        (seq, invoice_no, token, status,
         client_name, client_phone, client_email, client_nric_uen,
         event_type, venue_space, booking_date, start_time, end_time, hours,
-        hourly_rate, cleaning_fee, deposit_amount, pet_fee, discount, discount_note, rental_total, grand_total, notes)
+        hourly_rate, cleaning_fee, deposit_amount, pet_fee, discount, discount_note, rental_total, grand_total,
+        rental_fee_note, cleaning_fee_note, deposit_note, pet_fee_note, promo_clause_title, promo_clause_text, notes)
      SELECT n,
             'INV-' || printf('%03d', n),
             ?, 'issued',
             ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?,
-            ?, ?, ?, ?, ?, ?, ?, ?, ?
+            ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?, ?
      FROM (SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM invoices)`
   )
     .bind(
       token,
       d.client_name, d.client_phone, d.client_email, d.client_nric_uen,
       d.event_type, d.venue_space, d.booking_date, d.start_time, d.end_time, d.hours,
-      d.hourly_rate, d.cleaning_fee, d.deposit_amount, d.pet_fee, d.discount, d.discount_note, d.rental_total, d.grand_total, d.notes
+      d.hourly_rate, d.cleaning_fee, d.deposit_amount, d.pet_fee, d.discount, d.discount_note, d.rental_total, d.grand_total,
+      d.rental_fee_note || null, d.cleaning_fee_note || null, d.deposit_note || null, d.pet_fee_note || null,
+      d.promo_clause_title || null, d.promo_clause_text || null, d.notes
     )
     .run();
   return getInvoiceByToken(env, token);

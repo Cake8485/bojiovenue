@@ -6,6 +6,13 @@ main = "src/worker.js"
 compatibility_date = "2025-01-01"
 compatibility_flags = ["nodejs_compat"]
 
+# Bundle the Barlow Bold font + logo as raw binary imports (ArrayBuffer at
+# runtime) rather than base64-encoding them into source — smaller, no runtime
+# decode cost. See src/assets.js.
+rules = [
+  { type = "Data", globs = ["**/*.ttf", "**/*.png"], fallthrough = true }
+]
+
 # ---------------------------------------------------------------------------
 # D1 database (Cloudflare's built-in SQLite — free tier, no extra service).
 # Run `npm run db:create` once, then paste the printed database_id below.

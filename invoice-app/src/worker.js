@@ -107,6 +107,8 @@ async function submitSignature(env, ctx, token, request) {
 // Builds and files all 3 documents (Agreement, Booking Invoice, Deposit Invoice).
 // Signature is saved regardless of filing success — filing can always be retried
 // from the admin "Re-file" button, so a Drive hiccup never loses the client's signature.
+// `ok` carries both the Drive file id (for the DB) and webViewLink (for the Telegram
+// notification, so Kenneth can open the signed PDF straight from the message).
 async function fileAllDocuments(env, inv, payments) {
   const month = monthOf(inv.booking_date);
   const ok = { agreement: null, bookingInvoice: null, depositInvoice: null };
@@ -114,22 +116,22 @@ async function fileAllDocuments(env, inv, payments) {
   try {
     const agreementBytes = await buildAgreementPdf(env, inv);
     const agreementFiled = await fileToDrive(env, { monthName: month, filename: docName(inv, "Agreement"), pdfBytes: agreementBytes });
-    ok.agreement = agreementFiled.id;
+    ok.agreement = agreementFiled;
 
     const bookingBytes = await buildBookingInvoicePdf(env, inv, payments);
     const bookingFiled = await fileToDrive(env, { monthName: month, filename: docName(inv, "BookingInvoice"), pdfBytes: bookingBytes });
-    ok.bookingInvoice = bookingFiled.id;
+    ok.bookingInvoice = bookingFiled;
 
     const depositBytes = await buildDepositInvoicePdf(env, inv, payments);
     const depositFiled = await fileToDrive(env, { monthName: month, filename: docName(inv, "DepositInvoice"), pdfBytes: depositBytes });
-    ok.depositInvoice = depositFiled.id;
+    ok.depositInvoice = depositFiled;
 
-    await db.setDriveFileIds(env, inv.id, { agreement: ok.agreement, bookingInvoice: ok.bookingInvoice, depositInvoice: ok.depositInvoice });
+    await db.setDriveFileIds(env, inv.id, { agreement: ok.agreement?.id, bookingInvoice: ok.bookingInvoice?.id, depositInvoice: ok.depositInvoice?.id });
   } catch (e) {
     error = String((e && e.message) || e);
     console.log("FILE ERROR", error);
     // save whatever succeeded before the failure
-    await db.setDriveFileIds(env, inv.id, { agreement: ok.agreement, bookingInvoice: ok.bookingInvoice, depositInvoice: ok.depositInvoice });
+    await db.setDriveFileIds(env, inv.id, { agreement: ok.agreement?.id, bookingInvoice: ok.bookingInvoice?.id, depositInvoice: ok.depositInvoice?.id });
   }
   return { ok, error };
 }
@@ -310,6 +312,12 @@ async function createInvoice(env, request) {
     discount_note: discountNote,
     rental_total: q.rental_total,
     grand_total: q.grand_total,
+    rental_fee_note: b.rental_fee_note || null,
+    cleaning_fee_note: b.cleaning_fee_note || null,
+    deposit_note: b.deposit_note || null,
+    pet_fee_note: b.pet_fee_note || null,
+    promo_clause_title: b.promo_clause_title || null,
+    promo_clause_text: b.promo_clause_text || null,
     notes: b.notes || null,
   });
   return json({ invoice: row, signing_url: `${env.PUBLIC_BASE_URL}/sign/${row.token}` });

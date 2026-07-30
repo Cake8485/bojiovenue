@@ -35,6 +35,20 @@ CREATE TABLE IF NOT EXISTS invoices (
   rental_total         REAL    NOT NULL,                 -- Social: package lookup. Corporate/Seminar: hourly_rate * hours.
   grand_total          REAL    NOT NULL,                 -- rental_total + cleaning_fee + pet_fee - discount (deposit deliberately excluded) -- this is the "Booking Invoice" total
 
+  -- Promo labels shown in parentheses next to each line item on the Agreement
+  -- (e.g. "Rental Fee: $810 (SG61 x BoJio Turns One Promo)") — cosmetic only,
+  -- the actual amount is whatever hourly_rate/cleaning_fee/deposit_amount/pet_fee
+  -- were manually overridden to.
+  rental_fee_note      TEXT,
+  cleaning_fee_note    TEXT,
+  deposit_note         TEXT,
+  pet_fee_note         TEXT,
+  -- An optional custom clause (e.g. a promo's override of standard cancellation
+  -- terms) inserted into the Agreement as clause 5.6 (Whole Venue) / 4.6 (Main
+  -- Hall), right after the standard cancellation section.
+  promo_clause_title   TEXT,
+  promo_clause_text    TEXT,
+
   -- Status (three independent fields — rental payment, cleaning fee, and the refundable deposit are separate concerns)
   payment_status       TEXT    NOT NULL DEFAULT 'Unpaid',      -- Unpaid | Partially Paid | Paid  (rental total only)
   cleaning_fee_status  TEXT    NOT NULL DEFAULT 'Unpaid',      -- Unpaid | Paid
