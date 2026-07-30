@@ -32,12 +32,43 @@ export async function sendTelegramMessage(env, text) {
   console.log("[notify] no channel configured; message was:\n" + text);
 }
 
-export async function sendTelegram(env, chatId, text) {
+// `buttons`: optional array of rows, each row an array of {text, callback_data}
+// (Telegram's inline-keyboard shape) — used for the Telegram-as-admin-interface
+// confirm/send/preview/edit flow in worker.js.
+export async function sendTelegram(env, chatId, text, buttons) {
+  const body = { chat_id: chatId, text };
+  if (buttons) body.reply_markup = { inline_keyboard: buttons };
   const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, text }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) console.log("[notify] Telegram failed: " + (await res.text()));
+  return res;
+}
+
+// Acknowledges a button press — Telegram shows a loading spinner on the tapped
+// button until this is called, regardless of what (if anything) else is sent back.
+export async function answerCallbackQuery(env, callbackQueryId, text) {
+  const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ callback_query_id: callbackQueryId, text: text || undefined }),
+  });
+  if (!res.ok) console.log("[notify] answerCallbackQuery failed: " + (await res.text()));
+}
+
+// Sends a PDF (or any file) as a Telegram document attachment — used for the
+// "Preview agreement" button, so Kenneth sees the exact PDF the client will see.
+export async function sendTelegramDocument(env, chatId, filename, pdfBytes, caption) {
+  const form = new FormData();
+  form.append("chat_id", String(chatId));
+  if (caption) form.append("caption", caption);
+  form.append("document", new Blob([pdfBytes], { type: "application/pdf" }), filename);
+  const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendDocument`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) console.log("[notify] sendDocument failed: " + (await res.text()));
   return res;
 }

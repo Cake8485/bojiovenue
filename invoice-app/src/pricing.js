@@ -114,6 +114,46 @@ function corporateQuote(dateStr, hours, venue_space) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// PROMO PRESETS (added 2026-08-03). A promo is defined once (see db.js/promos
+// table) and auto-applies to any new booking whose booking_date falls inside
+// [valid_from, valid_to] while active=1 — Kenneth doesn't type anything special
+// for it to kick in. Layering, in order (each layer can be skipped/overridden):
+//   1. Standard auto price (socialQuote/corporateQuote above)
+//   2. Promo adjustment, if one is active for this date (this function)
+//   3. Manual override (hourly_rate/cleaning_fee explicitly passed) — ALWAYS wins,
+//      even over an active promo, per Kenneth's explicit requirement.
+// ---------------------------------------------------------------------------
+
+// Picks the applicable promo for a date from a list (db.listActivePromos already
+// filters to active=1; this does the date-window check). If more than one
+// overlaps — shouldn't normally happen — the most recently-starting one wins.
+export function findActivePromo(promos, booking_date) {
+  const matches = (promos || []).filter((p) => booking_date >= p.valid_from && booking_date <= p.valid_to);
+  if (!matches.length) return null;
+  return matches.sort((a, b) => (a.valid_from < b.valid_from ? 1 : -1))[0];
+}
+
+// Applies a promo on top of an auto-computed {hourly_rate, rental_total, cleaning_fee}.
+// discount_percent and extra_discount_amount both come off the RENTAL fee (confirmed
+// against the Nirmala example: $900 standard weekend 6h rental x 0.9 = $810 exactly).
+// cleaning_fee_override replaces the cleaning fee outright, not a percentage.
+function applyPromo(auto, promo, hours) {
+  if (!promo) return auto;
+  let rental = auto.rental_total;
+  if (promo.discount_percent) rental = round2(rental * (1 - promo.discount_percent / 100));
+  if (promo.extra_discount_hours_threshold && hours >= promo.extra_discount_hours_threshold) {
+    rental = round2(rental - (promo.extra_discount_amount || 0));
+  }
+  const cleaning = promo.cleaning_fee_override ?? auto.cleaning_fee;
+  return {
+    hourly_rate: round2(rental / hours), // recompute the effective/display rate for the new total
+    rental_total: rental,
+    cleaning_fee: cleaning,
+    deposit_amount: auto.deposit_amount, // promos in this spec never touch the deposit
+  };
+}
+
 // Parse a free-text discount description (e.g. from the Telegram "Other" field) into
 // a flat dollar amount. Only acts on patterns it's confident about — anything it can't
 // parse returns amount 0 with the raw text preserved as a note, so an unrecognized
@@ -132,16 +172,23 @@ export function parseDiscount(text, subtotal) {
 
 // Compute the money side. Any of hourly_rate / cleaning_fee / deposit_amount may be
 // passed to override the auto-derived defaults — the admin form always allows manual
-// override for edge cases (e.g. Main Hall Only on a weekend, >12h Social bookings).
+// override for edge cases (e.g. Main Hall Only on a weekend, >12h Social bookings),
+// and this ALWAYS wins even over an active promo.
+//
+// `promo` (optional): a row from the promos table (or null). If given and its date
+// window covers booking_date, its adjustment applies as the middle layer, between
+// the standard auto price and any manual override — see applyPromo() above.
 //
 // grand_total = rental_total + cleaning_fee + pet_fee - discount. The deposit is
 // tracked separately and deliberately excluded — it's refundable, not revenue.
-export function computeQuote({ event_type, venue_space, booking_date, hours, hourly_rate, cleaning_fee, deposit_amount, pet_fee, discount }) {
+export function computeQuote({ event_type, venue_space, booking_date, hours, hourly_rate, cleaning_fee, deposit_amount, pet_fee, discount, promo }) {
   const billedHours = Math.max(Number(hours) || 0, MIN_HOURS);
-  const auto =
+  const standardAuto =
     event_type === "Social"
       ? socialQuote(booking_date, billedHours)
       : corporateQuote(booking_date, billedHours, venue_space);
+  const promoActive = promo && booking_date >= promo.valid_from && booking_date <= promo.valid_to;
+  const auto = promoActive ? applyPromo(standardAuto, promo, billedHours) : standardAuto;
 
   const rate = numOr(hourly_rate, auto.hourly_rate);
   const clean = numOr(cleaning_fee, auto.cleaning_fee);
@@ -162,6 +209,10 @@ export function computeQuote({ event_type, venue_space, booking_date, hours, hou
     discount: disc,
     rental_total,
     grand_total,
+    // Only surfaced when the promo actually applied (and wasn't itself overridden
+    // away) — callers use these to prefill rental_fee_note/cleaning_fee_note/
+    // promo_clause_title/promo_clause_text/promo_id unless already set explicitly.
+    appliedPromo: promoActive ? promo : null,
   };
 }
 

@@ -42,9 +42,14 @@ const money=n=>'$'+Number(n||0).toFixed(2);
 
 async function load(){
   const r=await fetch('/api/sign/'+TOKEN);
-  if(!r.ok){app.textContent='This link is invalid or has expired.';return;}
+  if(!r.ok){
+    const d=await r.json().catch(()=>({}));
+    app.className='';
+    app.innerHTML='<div class="card" style="text-align:center"><b>'+(d.expired?'⏳ Link expired':'⚠️ Unavailable')+'</b>'+
+      '<div class="muted" style="margin-top:6px">'+(d.error||'This link is invalid.')+'</div></div>';
+    return;
+  }
   inv=(await r.json()).invoice;
-  if(inv.status==='void'){app.textContent='This invoice has been cancelled.';return;}
   render(inv.status==='signed');
 }
 
@@ -62,7 +67,9 @@ function render(signed){
      '<div class="agreement">'+inv.agreement_html+'</div>'+
    '</div>'+
    (signed
-     ? '<div class="card"><b>✅ Signed.</b><div class="muted">Thank you — your booking and deposit invoice have been filed. You may close this page.</div></div>'
+     ? '<div class="card"><b>✅ Signed.</b><div class="muted">Thank you — your booking and deposit invoice have been filed. You may close this page.</div>'+
+         '<a href="/sign/'+TOKEN+'/download" style="display:block;text-align:center;background:#111;color:#fff;border-radius:10px;padding:14px;font-size:16px;margin-top:12px;text-decoration:none">Download your copy (PDF)</a>'+
+       '</div>'
      : '<div class="card">'+
          '<label>Your full name</label><input id="name" autocomplete="name" placeholder="Full name" />'+
          '<label>Signature</label><canvas id="pad"></canvas>'+
@@ -187,6 +194,30 @@ export function adminPage(env) {
  </div>
 
  <div class="card">
+   <h2>Promos</h2>
+   <p class="muted" style="margin:0 0 8px">A promo whose date window covers a booking's date auto-applies to new bookings (Telegram and this form) — no need to type anything special. Only one should be active at a time.</p>
+   <table id="promoTbl"><thead><tr><th>Name</th><th>Valid</th><th>Effect</th><th>Active</th><th></th></tr></thead>
+   <tbody id="promoRows"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody></table>
+
+   <h2 style="margin-top:16px">New promo preset</h2>
+   <div class="grid">
+     <div><label>Name *</label><input id="pr_name" placeholder="e.g. SG61 x BoJio Turns One"></div>
+     <div><label>&nbsp;</label><label style="display:flex;align-items:center;gap:6px;margin-top:9px"><input type="checkbox" id="pr_active" checked style="width:auto"> Active</label></div>
+     <div><label>Valid from *</label><input id="pr_valid_from" type="date"></div>
+     <div><label>Valid to *</label><input id="pr_valid_to" type="date"></div>
+     <div><label>Discount % off rental</label><input id="pr_discount_percent" type="number" placeholder="e.g. 10"></div>
+     <div><label>Cleaning fee override (blank = no change)</label><input id="pr_cleaning_fee_override" type="number" placeholder="e.g. 61"></div>
+     <div><label>Extra $ off rental if hours ≥</label><input id="pr_extra_discount_hours_threshold" type="number" placeholder="e.g. 8"></div>
+     <div><label>Extra discount amount</label><input id="pr_extra_discount_amount" type="number" placeholder="e.g. 61"></div>
+     <div><label>Rental fee label <span class="muted">(shown on Agreement)</span></label><input id="pr_rental_fee_note" placeholder="e.g. SG61 x BoJio Turns One Promo"></div>
+     <div><label>Cleaning fee label</label><input id="pr_cleaning_fee_note" placeholder="e.g. SG61 Promo"></div>
+     <div><label>Custom clause title</label><input id="pr_clause_title" placeholder="e.g. Special Promotion Terms"></div>
+   </div>
+   <div style="margin-top:8px"><label>Custom clause text</label><textarea id="pr_clause_text" rows="3" style="width:100%;padding:9px;border:1px solid #cfcfd6;border-radius:8px;font-size:14px;font-family:inherit"></textarea></div>
+   <div style="margin-top:12px"><button id="createPromo">Create promo</button> <span id="createPromoMsg" class="muted"></span></div>
+ </div>
+
+ <div class="card">
    <h2>Invoices</h2>
    <table id="tbl"><thead><tr><th>No.</th><th>Client</th><th>Event</th><th>Total</th><th>Status</th><th>Actions</th></tr></thead>
    <tbody id="rows"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody></table>
@@ -217,7 +248,7 @@ document.getElementById('loginBtn').onclick=async()=>{
   KEY=k; localStorage.setItem('bojioAdminKey',KEY);
   document.getElementById('loginMsg').textContent='Checking…';
   const r=await fetch('/api/invoices',{headers:headers()});
-  if(r.ok){ showApp(); load(); } else { localStorage.removeItem('bojioAdminKey'); KEY=''; document.getElementById('loginMsg').textContent='Wrong key.'; }
+  if(r.ok){ showApp(); load(); loadPromos(); } else { localStorage.removeItem('bojioAdminKey'); KEY=''; document.getElementById('loginMsg').textContent='Wrong key.'; }
 };
 document.getElementById('keyInput').addEventListener('keydown',e=>{ if(e.key==='Enter') document.getElementById('loginBtn').click(); });
 const money=n=>'$'+Number(n||0).toFixed(2);
@@ -290,6 +321,45 @@ async function load(){
 }
 function copyLink(tok){ const url=location.origin+'/sign/'+tok; copy(url); toast('Signing link copied to clipboard.'); }
 
+async function loadPromos(){
+  const r=await api('/api/promos');
+  const d=await r.json().catch(()=>({promos:[]}));
+  const rows=document.getElementById('promoRows');
+  if(!d.promos||!d.promos.length){rows.innerHTML='<tr><td colspan="5" class="muted">No promos yet.</td></tr>';return;}
+  rows.innerHTML=d.promos.map(p=>{
+    const bits=[];
+    if(p.discount_percent) bits.push(p.discount_percent+'% off rental');
+    if(p.cleaning_fee_override!==null && p.cleaning_fee_override!==undefined) bits.push('cleaning fee $'+p.cleaning_fee_override);
+    if(p.extra_discount_amount) bits.push('+$'+p.extra_discount_amount+' off if ≥'+p.extra_discount_hours_threshold+'h');
+    return '<tr><td>'+p.name+'</td><td>'+p.valid_from+' – '+p.valid_to+'</td><td class="muted">'+(bits.join(', ')||'—')+'</td>'+
+      '<td><span class="pill '+(p.active?'signed':'void')+'">'+(p.active?'Active':'Inactive')+'</span></td>'+
+      '<td><button class="sec" onclick="togglePromo('+p.id+','+(p.active?0:1)+')">'+(p.active?'Deactivate':'Activate')+'</button></td></tr>';
+  }).join('');
+}
+async function togglePromo(id,active){
+  const r=await api('/api/promos/'+id+'/active',{method:'POST',body:JSON.stringify({active:!!active})});
+  if(r.ok){ loadPromos(); } else { toast('Failed to update promo.'); }
+}
+document.getElementById('createPromo').onclick=async()=>{
+  const msg=document.getElementById('createPromoMsg');
+  if(!val('pr_name')||!val('pr_valid_from')||!val('pr_valid_to')){ msg.textContent='Name, valid from, and valid to are required.'; return; }
+  msg.textContent='Creating…';
+  const body={
+    name:val('pr_name'), active:document.getElementById('pr_active').checked,
+    valid_from:val('pr_valid_from'), valid_to:val('pr_valid_to'),
+    discount_percent:Number(val('pr_discount_percent'))||0,
+    cleaning_fee_override:val('pr_cleaning_fee_override')?Number(val('pr_cleaning_fee_override')):null,
+    extra_discount_hours_threshold:val('pr_extra_discount_hours_threshold')?Number(val('pr_extra_discount_hours_threshold')):null,
+    extra_discount_amount:Number(val('pr_extra_discount_amount'))||0,
+    rental_fee_note:val('pr_rental_fee_note')||null, cleaning_fee_note:val('pr_cleaning_fee_note')||null,
+    clause_title:val('pr_clause_title')||null, clause_text:val('pr_clause_text')||null,
+  };
+  const r=await api('/api/promos',{method:'POST',body:JSON.stringify(body)});
+  const d=await r.json().catch(()=>({}));
+  if(r.ok){ msg.textContent='Created.'; toast('Promo "'+d.promo.name+'" created.'); loadPromos(); }
+  else { msg.textContent=d.error||'Failed.'; }
+};
+
 function addPay(no){
   modal('Log payment for '+no,
     '<label>Amount received (SGD)</label><input id="pAmount" type="number" step="0.01">'+
@@ -340,7 +410,7 @@ function voidInv(no){
 (async function init(){
   if(!KEY){ showLogin(); return; }
   const r=await fetch('/api/invoices',{headers:headers()});
-  if(r.ok){ showApp(); load(); } else { localStorage.removeItem('bojioAdminKey'); KEY=''; showLogin('Session expired, enter the key again.'); }
+  if(r.ok){ showApp(); load(); loadPromos(); } else { localStorage.removeItem('bojioAdminKey'); KEY=''; showLogin('Session expired, enter the key again.'); }
 })();
 </script></body></html>`;
 }

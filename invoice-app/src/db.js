@@ -23,14 +23,14 @@ export async function createInvoice(env, d) {
         client_name, client_phone, client_email, client_nric_uen,
         event_type, venue_space, booking_date, start_time, end_time, hours,
         hourly_rate, cleaning_fee, deposit_amount, pet_fee, discount, discount_note, rental_total, grand_total,
-        rental_fee_note, cleaning_fee_note, deposit_note, pet_fee_note, promo_clause_title, promo_clause_text, notes)
+        rental_fee_note, cleaning_fee_note, deposit_note, pet_fee_note, promo_clause_title, promo_clause_text, promo_id, notes)
      SELECT n,
             'INV-' || printf('%03d', n),
             ?, 'issued',
             ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?, ?, ?,
-            ?, ?, ?, ?, ?, ?, ?
+            ?, ?, ?, ?, ?, ?, ?, ?
      FROM (SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM invoices)`
   )
     .bind(
@@ -39,7 +39,7 @@ export async function createInvoice(env, d) {
       d.event_type, d.venue_space, d.booking_date, d.start_time, d.end_time, d.hours,
       d.hourly_rate, d.cleaning_fee, d.deposit_amount, d.pet_fee, d.discount, d.discount_note, d.rental_total, d.grand_total,
       d.rental_fee_note || null, d.cleaning_fee_note || null, d.deposit_note || null, d.pet_fee_note || null,
-      d.promo_clause_title || null, d.promo_clause_text || null, d.notes
+      d.promo_clause_title || null, d.promo_clause_text || null, d.promo_id || null, d.notes
     )
     .run();
   return getInvoiceByToken(env, token);
@@ -108,4 +108,60 @@ export async function setStatus(env, id, { payment_status, cleaning_fee_status, 
 export async function voidInvoice(env, id) {
   await env.DB.prepare(`UPDATE invoices SET status='void', updated_at=datetime('now') WHERE id=?`)
     .bind(id).run();
+}
+
+// ---------------------------------------------------------------------------
+// Promo presets
+// ---------------------------------------------------------------------------
+export async function listActivePromos(env) {
+  const { results } = await env.DB.prepare(`SELECT * FROM promos WHERE active = 1`).all();
+  return results;
+}
+
+export async function listAllPromos(env) {
+  const { results } = await env.DB.prepare(`SELECT * FROM promos ORDER BY id DESC`).all();
+  return results;
+}
+
+export async function createPromo(env, p) {
+  const { meta } = await env.DB.prepare(
+    `INSERT INTO promos
+       (name, active, valid_from, valid_to, discount_percent, cleaning_fee_override,
+        extra_discount_hours_threshold, extra_discount_amount, rental_fee_note, cleaning_fee_note,
+        clause_title, clause_text)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  )
+    .bind(
+      p.name, p.active ?? 1, p.valid_from, p.valid_to,
+      p.discount_percent || 0, p.cleaning_fee_override ?? null,
+      p.extra_discount_hours_threshold ?? null, p.extra_discount_amount || 0,
+      p.rental_fee_note || null, p.cleaning_fee_note || null,
+      p.clause_title || null, p.clause_text || null
+    )
+    .run();
+  return env.DB.prepare(`SELECT * FROM promos WHERE id = ?`).bind(meta.last_row_id).first();
+}
+
+export async function setPromoActive(env, id, active) {
+  await env.DB.prepare(`UPDATE promos SET active = ? WHERE id = ?`).bind(active ? 1 : 0, id).run();
+}
+
+// ---------------------------------------------------------------------------
+// Pending bookings — staging for the Telegram "confirm before creating" flow.
+// ---------------------------------------------------------------------------
+export async function createPendingBooking(env, chatId, data) {
+  const { meta } = await env.DB.prepare(
+    `INSERT INTO pending_bookings (chat_id, data) VALUES (?, ?)`
+  ).bind(String(chatId), JSON.stringify(data)).run();
+  return meta.last_row_id;
+}
+
+export async function getPendingBooking(env, id) {
+  const row = await env.DB.prepare(`SELECT * FROM pending_bookings WHERE id = ?`).bind(id).first();
+  if (!row) return null;
+  return { ...row, data: JSON.parse(row.data) };
+}
+
+export async function deletePendingBooking(env, id) {
+  await env.DB.prepare(`DELETE FROM pending_bookings WHERE id = ?`).bind(id).run();
 }

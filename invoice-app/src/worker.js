@@ -6,8 +6,11 @@
 //   GET  /sign/:token              -> public signing page (shows the Agreement)
 //   GET  /api/sign/:token          -> public: booking + agreement data for the signing page
 //   POST /api/sign/:token          -> public: submit signature -> Agreement + 2 Invoice PDFs -> Drive -> notify
-//   POST /telegram/webhook         -> Telegram bot inbound: create an invoice from a templated message
-//                                      (restricted to Kenneth's own chat_id — see TELEGRAM_CHAT_ID)
+//   GET  /sign/:token/download     -> public: client's own copy of the signed Agreement (only once signed)
+//   POST /telegram/webhook         -> Telegram bot inbound — this IS the admin interface, not just
+//                                      notifications: new bookings (confirm-before-create flow via
+//                                      inline buttons), status updates ("INV-003 deposit paid"), preview.
+//                                      Restricted to Kenneth's own chat_id — see TELEGRAM_CHAT_ID.
 //   --- everything below requires  Authorization: Bearer <ADMIN_KEY> ---
 //   POST /api/invoices             -> create + issue an invoice (assigns INV-###)
 //   GET  /api/invoices             -> list
@@ -16,18 +19,23 @@
 //   POST /api/invoices/:no/status  -> set payment/cleaning/deposit status
 //   POST /api/invoices/:no/refile  -> regenerate the 3 PDFs + re-upload to Drive
 //   POST /api/invoices/:no/void    -> void (keeps the number)
+//   GET  /api/promos               -> list all promos
+//   POST /api/promos               -> create a promo preset
+//   POST /api/promos/:id/active    -> activate/deactivate a promo
 
 import * as db from "./db.js";
-import { computeQuote, parseDiscount, EVENT_TYPES, VENUE_SPACES } from "./pricing.js";
+import { computeQuote, parseDiscount, findActivePromo, EVENT_TYPES, VENUE_SPACES } from "./pricing.js";
 import { buildBookingInvoicePdf, buildDepositInvoicePdf } from "./pdf.js";
 import { agreementHtml, buildAgreementPdf } from "./agreement.js";
 import { fileToDrive } from "./drive.js";
-import { notifySigned, sendTelegram } from "./notify.js";
+import { notifySigned, sendTelegram, answerCallbackQuery, sendTelegramDocument } from "./notify.js";
 import { adminPage, signPage } from "./pages.js";
 
 const json = (data, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
 const html = (body) => new Response(body, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+
+const SIGNING_LINK_DAYS = 7;
 
 export default {
   async fetch(request, env, ctx) {
@@ -37,6 +45,7 @@ export default {
 
     try {
       // ---- Public: signing page + its API -------------------------------
+      if (parts[0] === "sign" && parts[1] && parts[2] === "download") return downloadSignedCopy(env, parts[1]);
       if (parts[0] === "sign" && parts[1]) return html(signPage(env, parts[1]));
 
       if (parts[0] === "api" && parts[1] === "sign" && parts[2]) {
@@ -47,7 +56,7 @@ export default {
 
       // ---- Telegram inbound webhook --------------------------------------
       if (parts[0] === "telegram" && parts[1] === "webhook" && method === "POST") {
-        return telegramWebhook(env, request);
+        return telegramWebhook(env, ctx, request);
       }
 
       // ---- Admin UI -----------------------------------------------------
@@ -69,11 +78,24 @@ export default {
 };
 
 // ---------------------------------------------------------------------------
+// Link expiry — 7 days from creation, but ONLY while unsigned. Once signed, the
+// record and its documents are permanent; expiry only governs how long a client
+// has to review and sign before the offer lapses.
+// ---------------------------------------------------------------------------
+function isExpired(inv) {
+  if (inv.status === "signed" || inv.status === "void") return false;
+  const created = new Date(String(inv.created_at).replace(" ", "T") + "Z");
+  return Date.now() - created.getTime() > SIGNING_LINK_DAYS * 24 * 60 * 60 * 1000;
+}
+
+// ---------------------------------------------------------------------------
 // Public signing
 // ---------------------------------------------------------------------------
 async function getSignData(env, token) {
   const inv = await db.getInvoiceByToken(env, token);
   if (!inv) return json({ error: "not found" }, 404);
+  if (inv.status === "void") return json({ error: "This invoice has been cancelled." }, 410);
+  if (isExpired(inv)) return json({ error: "This signing link has expired. Contact BojioVenue for a new one.", expired: true }, 410);
   // Only expose what the signing page needs — no phone/full payment history.
   const safe = {
     invoice_no: inv.invoice_no, status: inv.status, client_name: inv.client_name,
@@ -90,6 +112,7 @@ async function submitSignature(env, ctx, token, request) {
   if (!inv) return json({ error: "not found" }, 404);
   if (inv.status === "void") return json({ error: "This invoice has been cancelled." }, 410);
   if (inv.status === "signed") return json({ error: "Already signed.", already: true }, 409);
+  if (isExpired(inv)) return json({ error: "This signing link has expired. Contact BojioVenue for a new one.", expired: true }, 410);
 
   const body = await request.json().catch(() => ({}));
   if (!body.signature_png || !body.signer_name) return json({ error: "Signature and name are required." }, 400);
@@ -102,6 +125,24 @@ async function submitSignature(env, ctx, token, request) {
   ctx.waitUntil(notifySigned(env, signed, filed.ok));
 
   return json({ ok: true, invoice_no: signed.invoice_no, filed: filed.ok, fileError: filed.error });
+}
+
+// Client's own copy, per addendum ("optional pull, never pushed"). Regenerated
+// fresh from the DB record rather than re-fetched from Drive — keeps Kenneth's
+// Drive folder fully private (no public sharing link ever created on those files),
+// while the client can still always grab their own copy via the same token that
+// let them sign in the first place.
+async function downloadSignedCopy(env, token) {
+  const inv = await db.getInvoiceByToken(env, token);
+  if (!inv) return json({ error: "not found" }, 404);
+  if (inv.status !== "signed") return json({ error: "Not signed yet." }, 404);
+  const pdfBytes = await buildAgreementPdf(env, inv);
+  return new Response(pdfBytes, {
+    headers: {
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `attachment; filename="${docName(inv, "Agreement")}"`,
+    },
+  });
 }
 
 // Builds and files all 3 documents (Agreement, Booking Invoice, Deposit Invoice).
@@ -137,7 +178,33 @@ async function fileAllDocuments(env, inv, payments) {
 }
 
 // ---------------------------------------------------------------------------
-// Telegram inbound webhook — create an invoice from a fixed template message.
+// Promo-aware quote — the single path both the admin form AND Telegram use, so
+// "active promo auto-applies to new bookings" holds true regardless of channel.
+// Explicit rental_fee_note/cleaning_fee_note/promo_clause_title/promo_clause_text
+// passed by the caller always win over the promo's own defaults for those fields.
+// ---------------------------------------------------------------------------
+async function computeQuoteWithPromo(env, params) {
+  const promos = await db.listActivePromos(env);
+  const promo = findActivePromo(promos, params.booking_date);
+  const q = computeQuote({ ...params, promo });
+  const applied = q.appliedPromo;
+  return {
+    ...q,
+    rental_fee_note: params.rental_fee_note || (applied ? applied.rental_fee_note : null),
+    cleaning_fee_note: params.cleaning_fee_note || (applied ? applied.cleaning_fee_note : null),
+    promo_clause_title: params.promo_clause_title || (applied ? applied.clause_title : null),
+    promo_clause_text: params.promo_clause_text || (applied ? applied.clause_text : null),
+    promo_id: applied ? applied.id : null,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Telegram — this IS Kenneth's admin interface (per addendum), not just
+// notifications. Two kinds of inbound text: a new-booking template, or a status
+// command like "INV-003 deposit paid"; plus inline-button callback queries for
+// the confirm/send/preview/edit flow. Deterministic parsing only — no AI/LLM
+// calls, to keep this at $0 recurring cost and avoid a model misreading a real
+// invoice's numbers.
 // ---------------------------------------------------------------------------
 const TELEGRAM_TEMPLATE_HELP =
   `Send a new booking in this exact format:\n\n` +
@@ -151,12 +218,17 @@ const TELEGRAM_TEMPLATE_HELP =
   `Purpose: Birthday party\n` +
   `Other: 10% discount\n\n` +
   `Event Type: Social, Corporate, or Seminar. Venue: Whole Venue or Main Hall Only. ` +
-  `Date must be YYYY-MM-DD. Other is optional — leave blank or omit if no discount/promo.`;
+  `Date must be YYYY-MM-DD. Other is optional — leave blank or omit if no extra discount.\n\n` +
+  `Or update an existing booking: "INV-003 deposit paid", "INV-003 booking paid", ` +
+  `"INV-003 cleaning paid", "INV-003 deposit refunded", "INV-003 partially paid".`;
 
-async function telegramWebhook(env, request) {
+async function telegramWebhook(env, ctx, request) {
   const update = await request.json().catch(() => ({}));
+
+  if (update.callback_query) return telegramCallback(env, update.callback_query);
+
   const msg = update.message;
-  if (!msg || !msg.text) return json({ ok: true }); // ignore non-text updates (edits, etc.)
+  if (!msg || !msg.text) return json({ ok: true }); // ignore non-text updates (edits, stickers, etc.)
 
   const chatId = String(msg.chat && msg.chat.id);
   if (!env.TELEGRAM_CHAT_ID || chatId !== String(env.TELEGRAM_CHAT_ID)) {
@@ -164,7 +236,14 @@ async function telegramWebhook(env, request) {
     return json({ ok: true }); // silently ignore — don't leak that this endpoint does anything
   }
 
-  const fields = parseTelegramTemplate(msg.text);
+  const statusMatch = msg.text.match(/^\s*(INV-\d+)\s+(.+)$/i);
+  if (statusMatch) return telegramStatusUpdate(env, chatId, statusMatch[1].toUpperCase(), statusMatch[2]);
+
+  return telegramNewBooking(env, chatId, msg.text);
+}
+
+async function telegramNewBooking(env, chatId, text) {
+  const fields = parseTelegramTemplate(text);
   if (!fields.name || !fields["date of event"]) {
     await sendTelegram(env, chatId, TELEGRAM_TEMPLATE_HELP);
     return json({ ok: true });
@@ -188,38 +267,152 @@ async function telegramWebhook(env, request) {
     const start_time = fields["time start"] || null;
     const hours = Number(fields["duration"]) || 4;
     const end_time = start_time ? addHours(start_time, hours) : null;
+    const client_nric_uen = fields["nric/uen"] || fields["nric"] || fields["uen"] || null;
 
-    const preDiscount = computeQuote({ event_type, venue_space, booking_date, hours });
+    const preDiscount = await computeQuoteWithPromo(env, { event_type, venue_space, booking_date, hours });
     const disc = parseDiscount(fields["other"], preDiscount.grand_total);
-    const q = computeQuote({ event_type, venue_space, booking_date, hours, discount: disc.amount });
+    const q = await computeQuoteWithPromo(env, { event_type, venue_space, booking_date, hours, discount: disc.amount });
 
-    const row = await db.createInvoice(env, {
-      client_name: fields.name,
-      client_phone: null,
-      client_email: null,
-      client_nric_uen: fields["nric/uen"] || fields["nric"] || fields["uen"] || null,
+    const pendingData = {
+      client_name: fields.name, client_phone: null, client_email: null, client_nric_uen,
       event_type, venue_space, booking_date, start_time, end_time,
       hours: q.hours, hourly_rate: q.hourly_rate, cleaning_fee: q.cleaning_fee,
       deposit_amount: q.deposit_amount, pet_fee: q.pet_fee,
       discount: q.discount, discount_note: disc.note || null,
       rental_total: q.rental_total, grand_total: q.grand_total,
+      rental_fee_note: q.rental_fee_note, cleaning_fee_note: q.cleaning_fee_note,
+      promo_clause_title: q.promo_clause_title, promo_clause_text: q.promo_clause_text, promo_id: q.promo_id,
       notes: fields.purpose || null,
-    });
+    };
+    const pendingId = await db.createPendingBooking(env, chatId, pendingData);
 
-    const signing_url = `${env.PUBLIC_BASE_URL}/sign/${row.token}`;
-    const discountLine = q.discount > 0 ? `Discount: -$${q.discount.toFixed(2)} (${disc.note})\n` : (fields.other ? `⚠️ Couldn't parse discount "${fields.other}" — left at $0, review in admin.\n` : "");
+    const promoLine = q.promo_id ? `Promo applied: ${q.rental_fee_note || "yes"}\n` : "";
+    const discountLine = q.discount > 0 ? `Extra discount: -$${q.discount.toFixed(2)} (${disc.note})\n` : (fields.other ? `⚠️ Couldn't parse "${fields.other}" as a discount — left at $0.\n` : "");
     await sendTelegram(env, chatId,
-      `✅ ${row.invoice_no} created for ${row.client_name}\n` +
+      `📋 Review booking for ${fields.name}\n` +
       `${event_type} · ${venue_space} · ${booking_date}${start_time ? " " + start_time : ""} (${hours}h)\n` +
-      `Booking total: $${q.grand_total.toFixed(2)}   Deposit: $${q.deposit_amount.toFixed(2)}\n` +
-      discountLine +
-      `Signing link:\n${signing_url}`
+      `Rental: $${q.rental_total.toFixed(2)}   Cleaning: $${q.cleaning_fee.toFixed(2)}\n` +
+      promoLine + discountLine +
+      `Booking total: $${q.grand_total.toFixed(2)}   Deposit: $${q.deposit_amount.toFixed(2)}\n\n` +
+      `Confirm to create this invoice, or cancel to discard.`,
+      [[{ text: "✅ Confirm", callback_data: `confirm:${pendingId}` }, { text: "❌ Cancel", callback_data: `cancel:${pendingId}` }]]
     );
   } catch (e) {
-    console.log("[telegram] error creating invoice", e);
-    await sendTelegram(env, chatId, `⚠️ Something went wrong creating that invoice: ${String((e && e.message) || e)}`);
+    console.log("[telegram] error preparing booking", e);
+    await sendTelegram(env, chatId, `⚠️ Something went wrong: ${String((e && e.message) || e)}`);
   }
 
+  return json({ ok: true });
+}
+
+// Recognized status phrases after "INV-XXX ". Checked in order — first match wins.
+// Order matters: "unpaid" contains "paid" as a substring, so every *.unpaid rule
+// must be checked before the *.paid rule it would otherwise be swallowed by.
+const STATUS_PHRASES = [
+  { re: /deposit.*refund/i, apply: { deposit_status: "Refunded" }, refile: "deposit", label: "Deposit refunded" },
+  { re: /clean(ing)?.*unpaid/i, apply: { cleaning_fee_status: "Unpaid" }, refile: "booking", label: "Cleaning fee marked unpaid" },
+  { re: /deposit.*paid|paid.*deposit/i, apply: { deposit_status: "Held" }, refile: "deposit", label: "Deposit marked paid (held)" },
+  { re: /clean(ing)?.*paid/i, apply: { cleaning_fee_status: "Paid" }, refile: "booking", label: "Cleaning fee marked paid" },
+  { re: /partial/i, apply: { payment_status: "Partially Paid" }, refile: "booking", label: "Rental marked partially paid" },
+  { re: /unpaid/i, apply: { payment_status: "Unpaid" }, refile: "booking", label: "Rental marked unpaid" },
+  { re: /(booking|rental|final).*paid|paid.*(booking|rental)|^paid$/i, apply: { payment_status: "Paid" }, refile: "booking", label: "Booking marked fully paid" },
+];
+
+async function telegramStatusUpdate(env, chatId, invoiceNo, statusText) {
+  const inv = await db.getInvoiceByNo(env, invoiceNo);
+  if (!inv) {
+    await sendTelegram(env, chatId, `⚠️ ${invoiceNo} not found.`);
+    return json({ ok: true });
+  }
+  const match = STATUS_PHRASES.find((p) => p.re.test(statusText));
+  if (!match) {
+    await sendTelegram(env, chatId,
+      `⚠️ Didn't recognize "${statusText}" for ${invoiceNo}. Try: "deposit paid", "booking paid", "cleaning paid", "deposit refunded", "partially paid".`);
+    return json({ ok: true });
+  }
+
+  await db.setStatus(env, inv.id, match.apply);
+  const updated = await db.getInvoiceByNo(env, invoiceNo);
+
+  let refileNote = "";
+  if (updated.status === "signed") {
+    const payments = await db.getPayments(env, updated.id);
+    try {
+      if (match.refile === "deposit") {
+        const bytes = await buildDepositInvoicePdf(env, updated, payments);
+        const filed = await fileToDrive(env, { monthName: monthOf(updated.booking_date), filename: docName(updated, "DepositInvoice"), pdfBytes: bytes });
+        await db.setDriveFileIds(env, updated.id, { depositInvoice: filed.id });
+        refileNote = `\nDeposit Invoice refiled: ${filed.webViewLink}`;
+      } else {
+        const bytes = await buildBookingInvoicePdf(env, updated, payments);
+        const filed = await fileToDrive(env, { monthName: monthOf(updated.booking_date), filename: docName(updated, "BookingInvoice"), pdfBytes: bytes });
+        await db.setDriveFileIds(env, updated.id, { bookingInvoice: filed.id });
+        refileNote = `\nBooking Invoice refiled: ${filed.webViewLink}`;
+      }
+    } catch (e) {
+      refileNote = `\n⚠️ Status updated, but refiling the PDF failed: ${String((e && e.message) || e)}`;
+    }
+  } else {
+    refileNote = "\n(Not yet signed — nothing to refile yet; status will show once it is.)";
+  }
+
+  await sendTelegram(env, chatId, `✅ ${invoiceNo}: ${match.label}.${refileNote}`);
+  return json({ ok: true });
+}
+
+async function telegramCallback(env, cq) {
+  const chatId = String(cq.message && cq.message.chat && cq.message.chat.id);
+  if (!env.TELEGRAM_CHAT_ID || chatId !== String(env.TELEGRAM_CHAT_ID)) {
+    await answerCallbackQuery(env, cq.id);
+    return json({ ok: true });
+  }
+
+  const [action, ref] = String(cq.data || "").split(":");
+  try {
+    if (action === "confirm") {
+      const pending = await db.getPendingBooking(env, ref);
+      if (!pending) {
+        await answerCallbackQuery(env, cq.id, "This has expired or was already handled.");
+        return json({ ok: true });
+      }
+      const row = await db.createInvoice(env, pending.data);
+      await db.deletePendingBooking(env, ref);
+      await answerCallbackQuery(env, cq.id, "Confirmed!");
+      await sendTelegram(env, chatId,
+        `✅ ${row.invoice_no} created for ${row.client_name}. Not sent to the client yet.`,
+        [[
+          { text: "📤 Send signing link", callback_data: `send:${row.invoice_no}` },
+          { text: "👁 Preview", callback_data: `preview:${row.invoice_no}` },
+          { text: "✏️ Edit", callback_data: `edit:${row.invoice_no}` },
+        ]]
+      );
+    } else if (action === "cancel") {
+      await db.deletePendingBooking(env, ref);
+      await answerCallbackQuery(env, cq.id, "Cancelled.");
+      await sendTelegram(env, chatId, "❌ Booking discarded — nothing was created.");
+    } else if (action === "send") {
+      const inv = await db.getInvoiceByNo(env, ref);
+      await answerCallbackQuery(env, cq.id);
+      if (!inv) { await sendTelegram(env, chatId, `⚠️ ${ref} not found.`); return json({ ok: true }); }
+      await sendTelegram(env, chatId, `Signing link for ${ref} (forward this to the client):\n${env.PUBLIC_BASE_URL}/sign/${inv.token}`);
+    } else if (action === "preview") {
+      const inv = await db.getInvoiceByNo(env, ref);
+      await answerCallbackQuery(env, cq.id, "Generating preview...");
+      if (!inv) { await sendTelegram(env, chatId, `⚠️ ${ref} not found.`); return json({ ok: true }); }
+      const bytes = await buildAgreementPdf(env, inv);
+      await sendTelegramDocument(env, chatId, docName(inv, "Agreement"), bytes, `Preview: ${ref} (unsigned)`);
+    } else if (action === "edit") {
+      await answerCallbackQuery(env, cq.id);
+      await sendTelegram(env, chatId,
+        `To edit ${ref}: void it from /admin, then resend the corrected booking details as a new message. ` +
+        `(Field-level editing via Telegram isn't built yet — this is the v1 workaround.)`);
+    } else {
+      await answerCallbackQuery(env, cq.id);
+    }
+  } catch (e) {
+    console.log("[telegram] callback error", e);
+    await answerCallbackQuery(env, cq.id, "Something went wrong — check /admin.");
+  }
   return json({ ok: true });
 }
 
@@ -248,7 +441,8 @@ function addHours(timeStr, hours) {
 // Admin API
 // ---------------------------------------------------------------------------
 async function adminApi(env, parts, method, request) {
-  // parts: ['api','invoices', maybe :no, maybe action]
+  // parts: ['api', 'invoices'|'promos', maybe :id/:no, maybe action]
+  if (parts[1] === "promos") return promosApi(env, parts, method, request);
   if (parts[1] !== "invoices") return json({ error: "unknown route" }, 404);
 
   if (parts.length === 2) {
@@ -277,6 +471,26 @@ async function adminApi(env, parts, method, request) {
   return json({ error: "unknown route" }, 404);
 }
 
+async function promosApi(env, parts, method, request) {
+  if (parts.length === 2) {
+    if (method === "GET") return json({ promos: await db.listAllPromos(env) });
+    if (method === "POST") {
+      const b = await request.json().catch(() => ({}));
+      if (!b.name || !b.valid_from || !b.valid_to) return json({ error: "name, valid_from, valid_to are required" }, 400);
+      const promo = await db.createPromo(env, b);
+      return json({ promo });
+    }
+    return json({ error: "method not allowed" }, 405);
+  }
+  const id = parts[2], action = parts[3];
+  if (action === "active" && method === "POST") {
+    const b = await request.json().catch(() => ({}));
+    await db.setPromoActive(env, id, b.active);
+    return json({ ok: true });
+  }
+  return json({ error: "unknown route" }, 404);
+}
+
 async function createInvoice(env, request) {
   const b = await request.json().catch(() => ({}));
   if (!b.client_name || !b.booking_date || !b.event_type || !b.venue_space)
@@ -286,13 +500,13 @@ async function createInvoice(env, request) {
   // flat amount — the admin form sends text; the Telegram path could send either.
   let discount = b.discount, discountNote = b.discount_note || null;
   if ((discount === undefined || discount === null || discount === "") && b.discount_text) {
-    const pre = computeQuote(b);
+    const pre = await computeQuoteWithPromo(env, b);
     const parsed = parseDiscount(b.discount_text, pre.grand_total);
     discount = parsed.amount;
     discountNote = parsed.note || null;
   }
 
-  const q = computeQuote({ ...b, discount });
+  const q = await computeQuoteWithPromo(env, { ...b, discount });
   const row = await db.createInvoice(env, {
     client_name: b.client_name,
     client_phone: b.client_phone || null,
@@ -312,12 +526,13 @@ async function createInvoice(env, request) {
     discount_note: discountNote,
     rental_total: q.rental_total,
     grand_total: q.grand_total,
-    rental_fee_note: b.rental_fee_note || null,
-    cleaning_fee_note: b.cleaning_fee_note || null,
+    rental_fee_note: b.rental_fee_note || q.rental_fee_note || null,
+    cleaning_fee_note: b.cleaning_fee_note || q.cleaning_fee_note || null,
     deposit_note: b.deposit_note || null,
     pet_fee_note: b.pet_fee_note || null,
-    promo_clause_title: b.promo_clause_title || null,
-    promo_clause_text: b.promo_clause_text || null,
+    promo_clause_title: b.promo_clause_title || q.promo_clause_title || null,
+    promo_clause_text: b.promo_clause_text || q.promo_clause_text || null,
+    promo_id: q.promo_id || null,
     notes: b.notes || null,
   });
   return json({ invoice: row, signing_url: `${env.PUBLIC_BASE_URL}/sign/${row.token}` });

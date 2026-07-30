@@ -1,6 +1,27 @@
 -- BojioVenue D1 schema.
 -- One document, status-driven (invoice + receipt in one). See README for rationale.
 
+-- Promo presets (added 2026-08-03). Defined once, auto-applied to new bookings
+-- whose booking_date falls within [valid_from, valid_to] and where active=1.
+-- Only one promo is expected active at a time in practice, but the pricing engine
+-- just takes the first match ordered by valid_from DESC if more than one overlaps.
+CREATE TABLE IF NOT EXISTS promos (
+  id                        INTEGER PRIMARY KEY AUTOINCREMENT,
+  name                      TEXT    NOT NULL,
+  active                    INTEGER NOT NULL DEFAULT 1,  -- manual kill-switch, independent of the date window
+  valid_from                TEXT    NOT NULL,            -- YYYY-MM-DD, inclusive
+  valid_to                  TEXT    NOT NULL,            -- YYYY-MM-DD, inclusive
+  discount_percent          REAL    NOT NULL DEFAULT 0,  -- % off the standard rental fee
+  cleaning_fee_override     REAL,                        -- flat replacement for the standard cleaning fee, NULL = no override
+  extra_discount_hours_threshold REAL,                   -- e.g. 8 — booking must be >= this many hours
+  extra_discount_amount     REAL    NOT NULL DEFAULT 0,  -- extra flat $ off rental if hours >= threshold
+  rental_fee_note           TEXT,                        -- shown in parentheses next to Rental Fee on the agreement
+  cleaning_fee_note         TEXT,                        -- shown in parentheses next to Cleaning Fee
+  clause_title              TEXT,                        -- inserted as clause 5.6/4.6, if set
+  clause_text               TEXT,
+  created_at                TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS invoices (
   id                   INTEGER PRIMARY KEY AUTOINCREMENT,
   seq                  INTEGER NOT NULL UNIQUE,          -- gapless sequence: 1, 2, 3, ...
@@ -48,6 +69,7 @@ CREATE TABLE IF NOT EXISTS invoices (
   -- Hall), right after the standard cancellation section.
   promo_clause_title   TEXT,
   promo_clause_text    TEXT,
+  promo_id             INTEGER REFERENCES promos(id), -- which preset auto-applied, if any (audit trail)
 
   -- Status (three independent fields — rental payment, cleaning fee, and the refundable deposit are separate concerns)
   payment_status       TEXT    NOT NULL DEFAULT 'Unpaid',      -- Unpaid | Partially Paid | Paid  (rental total only)
@@ -84,3 +106,15 @@ CREATE TABLE IF NOT EXISTS payments (
 CREATE INDEX IF NOT EXISTS idx_payments_invoice ON payments(invoice_id);
 CREATE INDEX IF NOT EXISTS idx_invoices_booking ON invoices(booking_date);
 CREATE INDEX IF NOT EXISTS idx_invoices_status  ON invoices(status);
+
+-- Staging area for the Telegram "confirm before creating anything" flow. A parsed
+-- + priced booking is held here (NOT yet an invoice, no number burned) until Kenneth
+-- taps Confirm on the inline-button reply. `data` is the full computed booking as
+-- JSON. Telegram callback_data is limited to 64 bytes, so this row's small integer
+-- `id` is what round-trips through the button instead of the booking itself.
+CREATE TABLE IF NOT EXISTS pending_bookings (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id      TEXT    NOT NULL,
+  data         TEXT    NOT NULL, -- JSON blob: all fields createInvoice() needs
+  created_at   TEXT    NOT NULL DEFAULT (datetime('now'))
+);
