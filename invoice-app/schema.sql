@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS promos (
   cleaning_fee_override     REAL,                        -- flat replacement for the standard cleaning fee, NULL = no override
   extra_discount_hours_threshold REAL,                   -- e.g. 8 — booking must be >= this many hours
   extra_discount_amount     REAL    NOT NULL DEFAULT 0,  -- extra flat $ off rental if hours >= threshold
+  package_rate              REAL,                        -- optional Social $/hr suggestion (added Addendum 3); NULL = suggest the usual weekday/weekend rate
   rental_fee_note           TEXT,                        -- shown in parentheses next to Rental Fee on the agreement
   cleaning_fee_note         TEXT,                        -- shown in parentheses next to Cleaning Fee
   clause_title              TEXT,                        -- inserted as clause 5.6/4.6, if set
@@ -47,14 +48,27 @@ CREATE TABLE IF NOT EXISTS invoices (
   hours                REAL    NOT NULL,                 -- billed hours (>= 4h minimum)
 
   -- Money (no GST — not registered)
-  hourly_rate          REAL    NOT NULL,                 -- for Social this is a blended/effective rate (package_total / hours), not a nominal rate
+  -- Social pricing (rewritten Addendum 3, 2026-08-10): usual_rate (auto, weekday
+  -- $150/weekend $180) x hourly_rate (the "package rate" actually charged, manual
+  -- or promo-suggested) x hours = rental_subtotal, then discount_percent applied on
+  -- top -> rental_total. This replaces the old fixed package-lookup table so the
+  -- agreement can show the full breakdown Kenneth already gives clients over
+  -- WhatsApp: usual rate, package rate, subtotal, discount %, final price.
+  -- Corporate/Seminar is UNCHANGED: hourly_rate is the tier rate, rental_total =
+  -- hourly_rate * hours, and `discount`/`discount_note` (flat $, parsed from free
+  -- text) is subtracted at the grand_total step instead — usual_rate/rental_subtotal/
+  -- discount_percent are simply NULL/0 for these bookings.
+  usual_rate           REAL,                              -- Social only: the weekday/weekend reference rate at booking time, for display
+  hourly_rate          REAL    NOT NULL,                 -- Social: the package rate actually charged. Corporate/Seminar: the tier rate.
+  rental_subtotal      REAL,                              -- Social: hourly_rate * hours, BEFORE discount_percent. Corporate: same as rental_total (no percent layer).
+  discount_percent     REAL    NOT NULL DEFAULT 0,        -- Social only: % off rental_subtotal, manual or promo-suggested
   cleaning_fee         REAL    NOT NULL DEFAULT 0,
   deposit_amount       REAL    NOT NULL DEFAULT 0,        -- SEPARATE refundable security deposit — never netted into grand_total or balance owed
   pet_fee              REAL    NOT NULL DEFAULT 0,        -- optional $100 add-on, checkbox on the invoice form
-  discount             REAL    NOT NULL DEFAULT 0,        -- flat $ off the booking invoice total (parsed from % or $ input)
+  discount             REAL    NOT NULL DEFAULT 0,        -- Social: dollar amount discount_percent works out to (informational). Corporate: flat $ off (parsed from % or $ input) subtracted at grand_total.
   discount_note         TEXT,                             -- raw text describing the discount (e.g. "10% loyalty discount"), for audit
-  rental_total         REAL    NOT NULL,                 -- Social: package lookup. Corporate/Seminar: hourly_rate * hours.
-  grand_total          REAL    NOT NULL,                 -- rental_total + cleaning_fee + pet_fee - discount (deposit deliberately excluded) -- this is the "Booking Invoice" total
+  rental_total         REAL    NOT NULL,                 -- FINAL rental fee. Social: rental_subtotal - discount, already net. Corporate/Seminar: hourly_rate * hours, gross (discount subtracted later at grand_total).
+  grand_total          REAL    NOT NULL,                 -- Social: rental_total + cleaning_fee + pet_fee (discount already baked into rental_total). Corporate: rental_total + cleaning_fee + pet_fee - discount. This is the "Booking Invoice" total.
 
   -- Promo labels shown in parentheses next to each line item on the Agreement
   -- (e.g. "Rental Fee: $810 (SG61 x BoJio Turns One Promo)") — cosmetic only,
@@ -87,6 +101,23 @@ CREATE TABLE IF NOT EXISTS invoices (
   drive_agreement_file_id       TEXT,
   drive_booking_invoice_file_id TEXT,
   drive_deposit_invoice_file_id TEXT,
+  -- Receipts (added Addendum 3) — distinct documents from the invoices above, filed
+  -- only once the corresponding payment is actually confirmed via Telegram, not at
+  -- signing time. Invoice = bill (what's owed); Receipt = proof of payment received.
+  drive_rental_receipt_file_id  TEXT,
+  drive_deposit_receipt_file_id TEXT,
+
+  -- Payment-event timestamps (added Addendum 3) — each is set once, the first time
+  -- its status command is applied; re-applying the same command does not move them.
+  -- Needed both for the receipts (payment date) and for stage tracking / reminders.
+  sent_at                    TEXT,  -- when Kenneth tapped "Send signing link" in Telegram
+  rental_paid_at             TEXT,  -- when "INV-XXX rental paid" was first applied
+  deposit_paid_at            TEXT,  -- when "INV-XXX deposit paid" was first applied
+  deposit_refunded_at        TEXT,  -- when "INV-XXX deposit refunded" was first applied
+  -- One-time markers so the daily cron reminder doesn't re-nag about the same
+  -- booking every day once the threshold is crossed.
+  unsigned_reminder_sent_at  TEXT,
+  deposit_reminder_sent_at   TEXT,
 
   created_at           TEXT    NOT NULL DEFAULT (datetime('now')),
   updated_at           TEXT    NOT NULL DEFAULT (datetime('now'))

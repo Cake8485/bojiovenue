@@ -24,9 +24,11 @@
 //   POST /api/promos/:id/active    -> activate/deactivate a promo
 
 import * as db from "./db.js";
-import { computeQuote, parseDiscount, findActivePromo, EVENT_TYPES, VENUE_SPACES } from "./pricing.js";
+import { computeQuote, parseDiscount, parsePercent, findActivePromo, EVENT_TYPES, VENUE_SPACES } from "./pricing.js";
 import { buildBookingInvoicePdf, buildDepositInvoicePdf } from "./pdf.js";
 import { agreementHtml, buildAgreementPdf } from "./agreement.js";
+import { buildRentalReceiptPdf, buildDepositReceiptPdf } from "./receipts.js";
+import { payNowQrSvg, invoicePayNowPayload } from "./paynow.js";
 import { fileToDrive } from "./drive.js";
 import { notifySigned, sendTelegram, answerCallbackQuery, sendTelegramDocument } from "./notify.js";
 import { adminPage, signPage } from "./pages.js";
@@ -75,7 +77,42 @@ export default {
       return json({ error: String((err && err.message) || err) }, 500);
     }
   },
+
+  // Daily cron (see wrangler.toml [triggers]) — two one-time reminders to Kenneth's
+  // Telegram: an agreement sent but unsigned after 3 days, and a deposit not yet
+  // collected with the event 7 days out. Each fires once per booking (see the
+  // *_reminder_sent_at columns) so the same booking doesn't get re-reported daily.
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(runDailyReminders(env));
+  },
 };
+
+async function runDailyReminders(env) {
+  try {
+    const unsigned = await db.listUnsignedNeedingReminder(env);
+    for (const inv of unsigned) {
+      await sendTelegram(env, env.TELEGRAM_CHAT_ID,
+        `⏰ ${inv.invoice_no} (${inv.client_name}) was sent to the client but is still unsigned after 3+ days.\n` +
+        `Event: ${inv.booking_date} · ${event_summary(inv)}\n` +
+        `Signing link: ${env.PUBLIC_BASE_URL}/sign/${inv.token}`);
+      await db.markTimestampOnce(env, inv.id, "unsigned_reminder_sent_at");
+    }
+
+    const depositsDue = await db.listDepositsDueNeedingReminder(env);
+    for (const inv of depositsDue) {
+      const amountDue = Number(inv.deposit_amount || 0) + Number(inv.cleaning_fee || 0);
+      await sendTelegram(env, env.TELEGRAM_CHAT_ID,
+        `⏰ ${inv.invoice_no} (${inv.client_name}) — event on ${inv.booking_date} is within 7 days and the deposit + cleaning fee ($${amountDue.toFixed(2)}) hasn't been collected yet.\n` +
+        `Reply "${inv.invoice_no} deposit paid" once it comes in.`);
+      await db.markTimestampOnce(env, inv.id, "deposit_reminder_sent_at");
+    }
+  } catch (e) {
+    console.log("[cron] reminder run failed", e);
+  }
+}
+function event_summary(inv) {
+  return `${inv.event_type} · ${inv.venue_space}`;
+}
 
 // ---------------------------------------------------------------------------
 // Link expiry — 7 days from creation, but ONLY while unsigned. Once signed, the
@@ -91,11 +128,26 @@ function isExpired(inv) {
 // ---------------------------------------------------------------------------
 // Public signing
 // ---------------------------------------------------------------------------
+// The next payment the client should make, in Kenneth's two-payment flow: rental
+// fee first (confirms the booking), then deposit + cleaning fee (due 7 days before
+// the event). Returns null once both are settled — no QR needed at that point.
+function nextPaymentDue(inv) {
+  if (inv.payment_status !== "Paid") {
+    return { amount: inv.rental_total, label: "Rental Fee", kind: "rental" };
+  }
+  if (inv.deposit_status !== "Held") {
+    return { amount: Number(inv.deposit_amount || 0) + Number(inv.cleaning_fee || 0), label: "Deposit + Cleaning Fee", kind: "deposit" };
+  }
+  return null;
+}
+
 async function getSignData(env, token) {
   const inv = await db.getInvoiceByToken(env, token);
   if (!inv) return json({ error: "not found" }, 404);
   if (inv.status === "void") return json({ error: "This invoice has been cancelled." }, 410);
   if (isExpired(inv)) return json({ error: "This signing link has expired. Contact BojioVenue for a new one.", expired: true }, 410);
+
+  const due = nextPaymentDue(inv);
   // Only expose what the signing page needs — no phone/full payment history.
   const safe = {
     invoice_no: inv.invoice_no, status: inv.status, client_name: inv.client_name,
@@ -103,6 +155,9 @@ async function getSignData(env, token) {
     grand_total: inv.grand_total, deposit_amount: inv.deposit_amount,
     agreement_title: inv.venue_space === "Main Hall Only" ? "Seminar / Training Room Rental Agreement" : "Event Space Rental Agreement",
     agreement_html: agreementHtml(env, inv),
+    payment_due: due
+      ? { amount: due.amount, label: due.label, qr_svg: payNowQrSvg(invoicePayNowPayload(env, inv, due.amount, due.kind)) }
+      : null,
   };
   return json({ invoice: safe });
 }
@@ -216,11 +271,17 @@ const TELEGRAM_TEMPLATE_HELP =
   `Time Start: 14:00\n` +
   `Duration: 8\n` +
   `Purpose: Birthday party\n` +
-  `Other: 10% discount\n\n` +
+  `Rate: 150\n` +
+  `Discount: 10\n` +
+  `Other: \n\n` +
   `Event Type: Social, Corporate, or Seminar. Venue: Whole Venue or Main Hall Only. ` +
-  `Date must be YYYY-MM-DD. Other is optional — leave blank or omit if no extra discount.\n\n` +
-  `Or update an existing booking: "INV-003 deposit paid", "INV-003 booking paid", ` +
-  `"INV-003 cleaning paid", "INV-003 deposit refunded", "INV-003 partially paid".`;
+  `Date must be YYYY-MM-DD. Rate and Discount are for Social bookings only — Rate is the ` +
+  `$/hr package rate for this booking (leave blank to use the usual weekday/weekend rate), ` +
+  `Discount is a plain % (leave blank for none; a promo may suggest both automatically). ` +
+  `Corporate/Seminar bookings use Other: for a free-text discount instead (e.g. "10% off").\n\n` +
+  `Or update an existing booking: "INV-003 rental paid", "INV-003 deposit paid", ` +
+  `"INV-003 cleaning paid", "INV-003 deposit refunded", "INV-003 partially paid". ` +
+  `"INV-003 stage" shows where a booking currently stands.`;
 
 async function telegramWebhook(env, ctx, request) {
   const update = await request.json().catch(() => ({}));
@@ -269,16 +330,29 @@ async function telegramNewBooking(env, chatId, text) {
     const end_time = start_time ? addHours(start_time, hours) : null;
     const client_nric_uen = fields["nric/uen"] || fields["nric"] || fields["uen"] || null;
 
-    const preDiscount = await computeQuoteWithPromo(env, { event_type, venue_space, booking_date, hours });
-    const disc = parseDiscount(fields["other"], preDiscount.grand_total);
-    const q = await computeQuoteWithPromo(env, { event_type, venue_space, booking_date, hours, discount: disc.amount });
+    // Social: dedicated Rate:/Discount: fields feed the usual/package/discount%
+    // model directly. Corporate/Seminar: unchanged free-text Other: field, parsed
+    // as a flat $ discount — that engine has no percent-discount concept.
+    const manualRate = fields["rate"] !== undefined && fields["rate"] !== "" ? Number(fields["rate"]) : undefined;
+    let q, discountNote;
+    if (event_type === "Social") {
+      const discount_percent = fields["discount"] ? parsePercent(fields["discount"]) : undefined;
+      q = await computeQuoteWithPromo(env, { event_type, venue_space, booking_date, hours, hourly_rate: manualRate, discount_percent });
+      discountNote = q.discount_percent > 0 ? `${q.discount_percent}% discount` : null;
+    } else {
+      const preDiscount = await computeQuoteWithPromo(env, { event_type, venue_space, booking_date, hours, hourly_rate: manualRate });
+      const disc = parseDiscount(fields["other"], preDiscount.grand_total);
+      q = await computeQuoteWithPromo(env, { event_type, venue_space, booking_date, hours, hourly_rate: manualRate, discount: disc.amount });
+      discountNote = disc.note || null;
+    }
 
     const pendingData = {
       client_name: fields.name, client_phone: null, client_email: null, client_nric_uen,
       event_type, venue_space, booking_date, start_time, end_time,
-      hours: q.hours, hourly_rate: q.hourly_rate, cleaning_fee: q.cleaning_fee,
+      hours: q.hours, usual_rate: q.usual_rate, hourly_rate: q.hourly_rate, rental_subtotal: q.rental_subtotal,
+      discount_percent: q.discount_percent, cleaning_fee: q.cleaning_fee,
       deposit_amount: q.deposit_amount, pet_fee: q.pet_fee,
-      discount: q.discount, discount_note: disc.note || null,
+      discount: q.discount, discount_note: discountNote,
       rental_total: q.rental_total, grand_total: q.grand_total,
       rental_fee_note: q.rental_fee_note, cleaning_fee_note: q.cleaning_fee_note,
       promo_clause_title: q.promo_clause_title, promo_clause_text: q.promo_clause_text, promo_id: q.promo_id,
@@ -287,12 +361,17 @@ async function telegramNewBooking(env, chatId, text) {
     const pendingId = await db.createPendingBooking(env, chatId, pendingData);
 
     const promoLine = q.promo_id ? `Promo applied: ${q.rental_fee_note || "yes"}\n` : "";
-    const discountLine = q.discount > 0 ? `Extra discount: -$${q.discount.toFixed(2)} (${disc.note})\n` : (fields.other ? `⚠️ Couldn't parse "${fields.other}" as a discount — left at $0.\n` : "");
+    const breakdown = event_type === "Social"
+      ? `Usual rate: $${q.usual_rate.toFixed(2)}/hr   Package rate: $${q.hourly_rate.toFixed(2)}/hr\n` +
+        `Subtotal: $${q.hourly_rate.toFixed(2)} × ${hours}h = $${q.rental_subtotal.toFixed(2)}\n` +
+        (q.discount_percent > 0 ? `Discount: ${q.discount_percent}% (-$${q.discount.toFixed(2)})\n` : "") +
+        `Rental: $${q.rental_total.toFixed(2)}   Cleaning: $${q.cleaning_fee.toFixed(2)}\n`
+      : `Rental: $${q.rental_total.toFixed(2)} (rate $${q.hourly_rate.toFixed(2)}/hr)   Cleaning: $${q.cleaning_fee.toFixed(2)}\n` +
+        (q.discount > 0 ? `Discount: -$${q.discount.toFixed(2)}${discountNote ? " (" + discountNote + ")" : ""}\n` : (fields.other ? `⚠️ Couldn't parse "${fields.other}" as a discount — left at $0.\n` : ""));
     await sendTelegram(env, chatId,
       `📋 Review booking for ${fields.name}\n` +
       `${event_type} · ${venue_space} · ${booking_date}${start_time ? " " + start_time : ""} (${hours}h)\n` +
-      `Rental: $${q.rental_total.toFixed(2)}   Cleaning: $${q.cleaning_fee.toFixed(2)}\n` +
-      promoLine + discountLine +
+      breakdown + promoLine +
       `Booking total: $${q.grand_total.toFixed(2)}   Deposit: $${q.deposit_amount.toFixed(2)}\n\n` +
       `Confirm to create this invoice, or cancel to discard.`,
       [[{ text: "✅ Confirm", callback_data: `confirm:${pendingId}` }, { text: "❌ Cancel", callback_data: `cancel:${pendingId}` }]]
@@ -308,15 +387,36 @@ async function telegramNewBooking(env, chatId, text) {
 // Recognized status phrases after "INV-XXX ". Checked in order — first match wins.
 // Order matters: "unpaid" contains "paid" as a substring, so every *.unpaid rule
 // must be checked before the *.paid rule it would otherwise be swallowed by.
+//
+// `receipt` (Addendum 3): which payment-confirmation receipt this phrase triggers,
+// if any. "rental paid" -> Receipt #1. "deposit paid" now bundles the cleaning fee
+// into the SAME payment event (Kenneth collects them together, 7 days before the
+// event) -> Receipt #2 covers both, and cleaning_fee_status flips alongside deposit_status.
 const STATUS_PHRASES = [
   { re: /deposit.*refund/i, apply: { deposit_status: "Refunded" }, refile: "deposit", label: "Deposit refunded" },
   { re: /clean(ing)?.*unpaid/i, apply: { cleaning_fee_status: "Unpaid" }, refile: "booking", label: "Cleaning fee marked unpaid" },
-  { re: /deposit.*paid|paid.*deposit/i, apply: { deposit_status: "Held" }, refile: "deposit", label: "Deposit marked paid (held)" },
-  { re: /clean(ing)?.*paid/i, apply: { cleaning_fee_status: "Paid" }, refile: "booking", label: "Cleaning fee marked paid" },
+  { re: /deposit.*paid|paid.*deposit/i, apply: { deposit_status: "Held", cleaning_fee_status: "Paid" }, refile: "deposit", receipt: "deposit", label: "Deposit + cleaning fee marked paid" },
+  { re: /clean(ing)?.*paid/i, apply: { cleaning_fee_status: "Paid" }, refile: "deposit", label: "Cleaning fee marked paid" },
   { re: /partial/i, apply: { payment_status: "Partially Paid" }, refile: "booking", label: "Rental marked partially paid" },
   { re: /unpaid/i, apply: { payment_status: "Unpaid" }, refile: "booking", label: "Rental marked unpaid" },
-  { re: /(booking|rental|final).*paid|paid.*(booking|rental)|^paid$/i, apply: { payment_status: "Paid" }, refile: "booking", label: "Booking marked fully paid" },
+  { re: /(booking|rental|final).*paid|paid.*(booking|rental)|^paid$/i, apply: { payment_status: "Paid" }, refile: "booking", receipt: "rental", label: "Rental fee marked paid" },
 ];
+
+// "INV-XXX stage" / "INV-XXX status" — a read-only check, handled before the
+// mutating STATUS_PHRASES so it can never be misread as a payment update.
+function computeStage(inv) {
+  if (inv.status === "void") return "Void (cancelled)";
+  if (inv.status === "issued") {
+    if (!inv.sent_at) return "Quote (not yet sent to client)";
+    return "Agreement Sent (awaiting signature)";
+  }
+  // signed:
+  if (inv.deposit_status === "Refunded") return "Deposit Refunded (event complete)";
+  const eventPast = inv.booking_date < new Date().toISOString().slice(0, 10);
+  if (inv.payment_status !== "Paid") return "Signed (awaiting rental payment)";
+  if (inv.deposit_status !== "Held") return eventPast ? "Event Done (deposit not yet collected)" : "Deposit Due (awaiting deposit + cleaning fee)";
+  return eventPast ? "Event Done (deposit held)" : "Deposit Paid (event upcoming)";
+}
 
 async function telegramStatusUpdate(env, chatId, invoiceNo, statusText) {
   const inv = await db.getInvoiceByNo(env, invoiceNo);
@@ -324,11 +424,38 @@ async function telegramStatusUpdate(env, chatId, invoiceNo, statusText) {
     await sendTelegram(env, chatId, `⚠️ ${invoiceNo} not found.`);
     return json({ ok: true });
   }
+
+  if (/^(stage|status)$/i.test(statusText.trim())) {
+    await sendTelegram(env, chatId, `📍 ${invoiceNo} (${inv.client_name}): ${computeStage(inv)}`);
+    return json({ ok: true });
+  }
+
   const match = STATUS_PHRASES.find((p) => p.re.test(statusText));
   if (!match) {
     await sendTelegram(env, chatId,
-      `⚠️ Didn't recognize "${statusText}" for ${invoiceNo}. Try: "deposit paid", "booking paid", "cleaning paid", "deposit refunded", "partially paid".`);
+      `⚠️ Didn't recognize "${statusText}" for ${invoiceNo}. Try: "rental paid", "deposit paid", "cleaning paid", "deposit refunded", "partially paid", or "stage".`);
     return json({ ok: true });
+  }
+
+  // Auto-log a matching payments-table entry the FIRST time each field actually
+  // flips to paid/held — otherwise "Total received"/"Balance outstanding" (and the
+  // PayNow QR's show-if-balance>0 check) never learn that a Telegram-marked payment
+  // came in, since those are computed from the payments log, not the status fields
+  // directly. Compares before/after per field so bundled ("deposit paid" also flips
+  // cleaning_fee_status) and standalone ("cleaning paid" alone) cases both log
+  // correctly without double-counting on a repeated command.
+  const today = new Date().toISOString().slice(0, 10);
+  if (match.apply.payment_status === "Paid" && inv.payment_status !== "Paid") {
+    const total = inv.event_type === "Social"
+      ? round2(Number(inv.rental_total) + Number(inv.pet_fee || 0))
+      : round2(Number(inv.rental_total) + Number(inv.pet_fee || 0) - Number(inv.discount || 0));
+    await db.addPayment(env, inv.id, { amount: total, kind: "balance", paid_on: today, note: "Auto-logged (Telegram: rental paid)" });
+  }
+  if (match.apply.deposit_status === "Held" && inv.deposit_status !== "Held") {
+    await db.addPayment(env, inv.id, { amount: Number(inv.deposit_amount || 0), kind: "deposit", paid_on: today, note: "Auto-logged (Telegram: deposit paid)" });
+  }
+  if (match.apply.cleaning_fee_status === "Paid" && inv.cleaning_fee_status !== "Paid") {
+    await db.addPayment(env, inv.id, { amount: Number(inv.cleaning_fee || 0), kind: "cleaning_fee", paid_on: today, note: "Auto-logged (Telegram: cleaning fee paid)" });
   }
 
   await db.setStatus(env, inv.id, match.apply);
@@ -352,12 +479,35 @@ async function telegramStatusUpdate(env, chatId, invoiceNo, statusText) {
     } catch (e) {
       refileNote = `\n⚠️ Status updated, but refiling the PDF failed: ${String((e && e.message) || e)}`;
     }
+
+    if (match.receipt) refileNote += await generateAndSendReceipt(env, chatId, updated, match.receipt);
   } else {
     refileNote = "\n(Not yet signed — nothing to refile yet; status will show once it is.)";
   }
 
   await sendTelegram(env, chatId, `✅ ${invoiceNo}: ${match.label}.${refileNote}`);
   return json({ ok: true });
+}
+
+// Builds + files the rental or deposit payment receipt, records the payment-event
+// timestamp (once only — re-applying the same command later won't move it), and
+// sends the PDF straight to Kenneth's Telegram so he can forward it on WhatsApp.
+async function generateAndSendReceipt(env, chatId, inv, kind) {
+  try {
+    const timestampCol = kind === "rental" ? "rental_paid_at" : "deposit_paid_at";
+    await db.markTimestampOnce(env, inv.id, timestampCol);
+    const fresh = await db.getInvoiceByNo(env, inv.invoice_no); // pick up the timestamp just set
+
+    const bytes = kind === "rental" ? await buildRentalReceiptPdf(env, fresh) : await buildDepositReceiptPdf(env, fresh);
+    const filename = docName(fresh, kind === "rental" ? "RentalReceipt" : "DepositReceipt");
+    const filed = await fileToDrive(env, { monthName: monthOf(fresh.booking_date), filename, pdfBytes: bytes });
+    await db.setReceiptFileIds(env, fresh.id, kind === "rental" ? { rentalReceipt: filed.id } : { depositReceipt: filed.id });
+    await sendTelegramDocument(env, chatId, filename, bytes, `Receipt for ${fresh.invoice_no} — forward to the client if needed.`);
+    return `\nReceipt generated and filed: ${filed.webViewLink}`;
+  } catch (e) {
+    console.log("[telegram] receipt generation failed", e);
+    return `\n⚠️ Payment recorded, but the receipt failed to generate: ${String((e && e.message) || e)}`;
+  }
 }
 
 async function telegramCallback(env, cq) {
@@ -394,6 +544,7 @@ async function telegramCallback(env, cq) {
       const inv = await db.getInvoiceByNo(env, ref);
       await answerCallbackQuery(env, cq.id);
       if (!inv) { await sendTelegram(env, chatId, `⚠️ ${ref} not found.`); return json({ ok: true }); }
+      await db.markTimestampOnce(env, inv.id, "sent_at"); // starts the 3-day unsigned-reminder clock
       await sendTelegram(env, chatId, `Signing link for ${ref} (forward this to the client):\n${env.PUBLIC_BASE_URL}/sign/${inv.token}`);
     } else if (action === "preview") {
       const inv = await db.getInvoiceByNo(env, ref);
@@ -496,17 +647,25 @@ async function createInvoice(env, request) {
   if (!b.client_name || !b.booking_date || !b.event_type || !b.venue_space)
     return json({ error: "client_name, booking_date, event_type, venue_space are required" }, 400);
 
-  // Discount can arrive either as free text to parse ("10% off") or an already-known
-  // flat amount — the admin form sends text; the Telegram path could send either.
-  let discount = b.discount, discountNote = b.discount_note || null;
-  if ((discount === undefined || discount === null || discount === "") && b.discount_text) {
-    const pre = await computeQuoteWithPromo(env, b);
-    const parsed = parseDiscount(b.discount_text, pre.grand_total);
-    discount = parsed.amount;
-    discountNote = parsed.note || null;
+  // Social: dedicated discount_percent field, feeding the usual/package/discount%
+  // model directly. Corporate/Seminar: unchanged free-text discount_text, parsed as
+  // a flat $ amount — that engine has no percent-discount concept.
+  let q, discountNote;
+  if (b.event_type === "Social") {
+    q = await computeQuoteWithPromo(env, { ...b, discount_percent: b.discount_percent });
+    discountNote = q.discount_percent > 0 ? `${q.discount_percent}% discount` : null;
+  } else {
+    let discount = b.discount, discountNote2 = b.discount_note || null;
+    if ((discount === undefined || discount === null || discount === "") && b.discount_text) {
+      const pre = await computeQuoteWithPromo(env, b);
+      const parsed = parseDiscount(b.discount_text, pre.grand_total);
+      discount = parsed.amount;
+      discountNote2 = parsed.note || null;
+    }
+    q = await computeQuoteWithPromo(env, { ...b, discount });
+    discountNote = discountNote2;
   }
 
-  const q = await computeQuoteWithPromo(env, { ...b, discount });
   const row = await db.createInvoice(env, {
     client_name: b.client_name,
     client_phone: b.client_phone || null,
@@ -518,7 +677,10 @@ async function createInvoice(env, request) {
     start_time: b.start_time || null,
     end_time: b.end_time || null,
     hours: q.hours,
+    usual_rate: q.usual_rate,
     hourly_rate: q.hourly_rate,
+    rental_subtotal: q.rental_subtotal,
+    discount_percent: q.discount_percent,
     cleaning_fee: q.cleaning_fee,
     deposit_amount: q.deposit_amount,
     pet_fee: q.pet_fee,
@@ -582,6 +744,9 @@ async function voidInvoice(env, no) {
 // ---------------------------------------------------------------------------
 function monthOf(dateStr) {
   return String(dateStr || "").slice(0, 7); // YYYY-MM
+}
+function round2(n) {
+  return Math.round(n * 100) / 100;
 }
 function docName(inv, kind) {
   const clean = String(inv.client_name || "client").replace(/[^A-Za-z0-9]+/g, "");

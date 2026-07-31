@@ -23,6 +23,19 @@ database_name = "bojiovenue-invoice"
 database_id = "9802d057-759b-4395-b3e1-391a882cfd44"
 
 # ---------------------------------------------------------------------------
+# Daily cron trigger (Addendum 3, free on Cloudflare's standard cron feature —
+# no separate service). Fires the `scheduled()` handler in worker.js, which sends
+# two one-time reminders to Kenneth's Telegram: agreements sent but unsigned after
+# 3 days, and deposits not yet collected with the event 7 days out.
+# "0 1 * * *" = 01:00 UTC daily = 09:00 Singapore time (UTC+8, no DST).
+# Cannot be tested locally — `wrangler dev` doesn't fire cron on a schedule; use
+# `wrangler dev --test-scheduled` and a manual curl to /__scheduled, or trigger it
+# directly once deployed via the dashboard's "Trigger Events" button.
+# ---------------------------------------------------------------------------
+[triggers]
+crons = ["0 1 * * *"]
+
+# ---------------------------------------------------------------------------
 # Non-secret config. (Secrets like API keys go in `wrangler secret put`,
 # NOT here — see README.)
 # ---------------------------------------------------------------------------

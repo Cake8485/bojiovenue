@@ -22,13 +22,36 @@
 // also carry its own override clause (b.promo_clause_title / b.promo_clause_text),
 // inserted as clause 5.6, immediately after the standard cancellation terms —
 // matching exactly how Kenneth's real "SG61 x BoJio Turns One Promo" clause works.
+//
+// SOCIAL PRICING BREAKDOWN (added Addendum 3, 2026-08-10): Social bookings show the
+// full usual rate / package rate / subtotal / discount % / final price breakdown
+// Kenneth already gives clients over WhatsApp (see pricing.js for the underlying
+// three-layer model). Corporate/Seminar bookings are unchanged — a single
+// "Rental Fee: $X" line, discount subtracted only at the Grand Total.
 
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
-import fontkit from "@pdf-lib/fontkit";
-import { barlowBoldFont, logoPng } from "./assets.js";
+import { isWeekend } from "./pricing.js";
+import { startBrandedDoc, drawBrandedCards, drawPageFooters, COLOR_TEXT, COLOR_CARD, roundedRectPath, M } from "./branding.js";
 
 const money = (n) => "$" + Number(n || 0).toFixed(2);
 const noteSuffix = (note) => (note ? ` (${note})` : "");
+
+// The Social breakdown block, inserted in place of a plain "Rental Fee: $X" line.
+// `clauseRef` is the promo-clause cross-reference suffix ("Refer to Clause 5.6" /
+// "4.6"), passed in so both templates can reuse this without duplicating the
+// clause-numbering knowledge.
+function socialPricingLines(b, clauseRef) {
+  const dayLabel = isWeekend(b.booking_date) ? "Weekend" : "Weekday";
+  const lines = [
+    { p: `Usual Rate: ${money(b.usual_rate)}/hr (${dayLabel})` },
+    { p: `Package Rate: ${money(b.hourly_rate)}/hr${noteSuffix(b.rental_fee_note)}` },
+    { p: `Rental Subtotal: ${money(b.hourly_rate)} × ${b.hours}h = ${money(b.rental_subtotal)}` },
+  ];
+  if (Number(b.discount_percent) > 0) {
+    lines.push({ p: `Discount: ${b.discount_percent}% (-${money(b.discount)})` });
+  }
+  lines.push({ p: `Rental Fee: ${money(b.rental_total)}${clauseRef}`, bold: true });
+  return lines;
+}
 
 function wholeVenueContent(env, b) {
   const grandTotal = Number(b.rental_total || 0) + Number(b.deposit_amount || 0) + Number(b.cleaning_fee || 0) + Number(b.pet_fee || 0);
@@ -50,7 +73,9 @@ function wholeVenueContent(env, b) {
     { p: "(Teardown must be completed within booked rental hours.)" },
     { p: "Complimentary setup time: 30 min provided in addition to rental hours. (This is out of goodwill and also depends on the bookings ahead of yours.)" },
     { p: `Event Purpose: ${b.notes || b.event_type}` },
-    { p: `Rental Fee: ${money(b.rental_total)}${noteSuffix(b.rental_fee_note)}${b.promo_clause_text ? " Refer to Clause 5.6" : ""}` },
+    ...(b.event_type === "Social"
+      ? socialPricingLines(b, b.promo_clause_text ? " Refer to Clause 5.6" : "")
+      : [{ p: `Rental Fee: ${money(b.rental_total)}${noteSuffix(b.rental_fee_note)}${b.promo_clause_text ? " Refer to Clause 5.6" : ""}` }]),
     { p: `- Security Deposit: ${money(b.deposit_amount)} (refundable, subject to Clause 8)${noteSuffix(b.deposit_note)}` },
     { p: `- Cleaning Fee: ${money(b.cleaning_fee)}${noteSuffix(b.cleaning_fee_note)}` },
     ...(Number(b.pet_fee) > 0 ? [{ p: `- Pet Cleaning Fee: ${money(b.pet_fee)}${noteSuffix(b.pet_fee_note)}` }] : []),
@@ -200,148 +225,29 @@ export function agreementHtml(env, booking) {
 }
 
 // ---------------------------------------------------------------------------
-// PDF rendering — paginated, styled to match the reference design:
-// sky-blue page, yellow rounded cards per section, deep-purple header/footer
-// bars, logo top-left, "Page X of Y" footer. pdf-lib has no built-in text flow
-// or rounded-rect primitive, so both are hand-rolled below.
+// PDF rendering — paginated, styled to match the reference design. The shared
+// page-shell/card-drawing logic lives in branding.js (also used by receipts.js);
+// only the Agreement-specific signature block is built here.
 // ---------------------------------------------------------------------------
-const COLOR_BG = rgb(0.576, 0.776, 0.851); // #93C6D9 sky blue
-const COLOR_CARD = rgb(1, 0.871, 0.345); // #FFDE58 yellow
-const COLOR_FRAME = rgb(0.247, 0.126, 0.361); // #3F205C deep purple
-const COLOR_TEXT = rgb(0.184, 0.043, 0.365); // #2F0B5D purple body text
-const A4 = [595.28, 841.89];
-const M = 42; // page margin outside the frame
-const BAR_H = 22; // top/bottom purple bar height
-const CARD_PAD = 14;
-const CARD_GAP = 12;
-
-function wrapText(font, size, text, maxWidth) {
-  const words = text.split(" ");
-  const lines = [];
-  let line = "";
-  for (const w of words) {
-    const test = line ? line + " " + w : w;
-    if (font.widthOfTextAtSize(test, size) > maxWidth && line) {
-      lines.push(line);
-      line = w;
-    } else {
-      line = test;
-    }
-  }
-  if (line) lines.push(line);
-  return lines;
-}
-
-// Rounded rectangle via SVG path (pdf-lib has no native rounded-rect primitive).
-// pdf-lib's drawSvgPath treats the path as LOCAL coordinates anchored at the {x,y}
-// passed in its options, with Y increasing DOWNWARD (SVG convention) — NOT absolute
-// PDF page coordinates. So this path is built relative to (0,0) = top-left of the
-// rect, extending right by `w` and DOWN by `h`; the caller passes the rect's
-// top-left PDF coordinate as the drawSvgPath `x`/`y` option.
-function roundedRectPath(w, h, r) {
-  return `M ${r} 0 L ${w - r} 0 Q ${w} 0 ${w} ${r} L ${w} ${h - r} Q ${w} ${h} ${w - r} ${h} L ${r} ${h} Q 0 ${h} 0 ${h - r} L 0 ${r} Q 0 0 ${r} 0 Z`;
-}
-
 export async function buildAgreementPdf(env, booking, logoImageBytes) {
-  const doc = await PDFDocument.create();
-  doc.registerFontkit(fontkit);
-  const font = await doc.embedFont(StandardFonts.Helvetica);
-  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
-  const titleFont = await doc.embedFont(barlowBoldFont); // real Barlow Bold, bundled — see src/assets.js
-
-  const contentW = A4[0] - 2 * M;
-  const maxTextW = contentW - 2 * CARD_PAD;
-
-  // Defaults to the bundled BojioVenue logo (with its cream background box, per
-  // Kenneth's confirmation — "use the existing file as-is") unless a different
-  // image is explicitly passed in.
-  const logoBytes = logoImageBytes || logoPng;
-  let logoImg = null;
-  if (logoBytes) {
-    const bytes = new Uint8Array(logoBytes);
-    const PNG_SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
-    const isPng = PNG_SIG.every((byte, i) => bytes[i] === byte);
-    try {
-      logoImg = isPng ? await doc.embedPng(bytes) : await doc.embedJpg(bytes);
-    } catch (e) {
-      console.log("[agreement] logo embed failed: " + e);
-    }
-  }
-
+  const { doc, font, bold, titleFont, logoImg } = await startBrandedDoc(logoImageBytes);
   const blocks = agreementContent(env, booking);
   const title = agreementTitle(booking).toUpperCase();
-
-  // Pre-measure each block's wrapped lines so we know each card's height before
-  // drawing its background (drawn back-to-front: card fill, then text on top).
-  const measured = blocks.map((b) => {
-    if (b.h) return { ...b, lines: [b.h], size: 10.5, isHeading: true };
-    const lines = wrapText(font, 9.5, b.p, maxTextW);
-    return { ...b, lines, size: 9.5, isHeading: false };
-  });
-
-  // Group into cards (each starts at a newCard block).
-  const cards = [];
-  for (const blk of measured) {
-    if (blk.newCard || cards.length === 0) cards.push([]);
-    cards[cards.length - 1].push(blk);
-  }
-
-  let pageNum = 0;
-  const pages = [];
-  let page, y;
-
-  function newPage() {
-    pageNum++;
-    page = doc.addPage(A4);
-    pages.push(page);
-    page.drawRectangle({ x: 0, y: 0, width: A4[0], height: A4[1], color: COLOR_BG });
-    page.drawRectangle({ x: 0, y: A4[1] - BAR_H, width: A4[0], height: BAR_H, color: COLOR_FRAME });
-    page.drawRectangle({ x: 0, y: 0, width: A4[0], height: BAR_H, color: COLOR_FRAME });
-    if (logoImg) {
-      const dims = logoImg.scaleToFit(120, 40);
-      page.drawImage(logoImg, { x: M, y: A4[1] - BAR_H - 16 - dims.height, width: dims.width, height: dims.height });
-    }
-    const titleX = logoImg ? M + 130 : M;
-    page.drawText(title, { x: titleX, y: A4[1] - BAR_H - 40, size: 19, font: titleFont, color: rgb(0, 0, 0) });
-    y = A4[1] - BAR_H - 70;
-  }
-  newPage();
-
-  const cardHeight = (card) => {
-    let h = CARD_PAD * 2;
-    for (const blk of card) h += blk.lines.length * (blk.isHeading ? 15 : 13) + (blk.isHeading ? 4 : 3);
-    return h;
-  };
-
-  for (const card of cards) {
-    const h = cardHeight(card);
-    if (y - h < BAR_H + 30) newPage();
-    const cardTop = y;
-    const cardY = cardTop - h;
-    page.drawSvgPath(roundedRectPath(contentW, h, 10), { x: M, y: cardTop, color: COLOR_CARD });
-    let ty = cardTop - CARD_PAD - 9;
-    for (const blk of card) {
-      const f = blk.isHeading || blk.bold ? bold : font;
-      for (const line of blk.lines) {
-        page.drawText(line, { x: M + CARD_PAD, y: ty, size: blk.size, font: f, color: COLOR_TEXT });
-        ty -= blk.isHeading ? 15 : 13;
-      }
-      ty -= blk.isHeading ? 4 : 3;
-    }
-    y = cardY - CARD_GAP;
-  }
+  let { pages, page, y, contentW, newPage } = drawBrandedCards({ doc, font, bold, titleFont, logoImg, title, blocks });
 
   // Signature block — two columns, matching the reference: Venue rep (typed, not
   // signed — Kenneth issues these himself) on the left, Client's captured signature
   // on the right.
   const sigH = 150;
-  if (y - sigH < BAR_H + 30) newPage();
+  if (y - sigH < 52) {
+    ({ page, y } = newPage());
+  }
   const sigTop = y;
   page.drawSvgPath(roundedRectPath(contentW, sigH, 10), { x: M, y: sigTop, color: COLOR_CARD });
-  let sy = sigTop - CARD_PAD - 9;
-  page.drawText("Signed by the Parties:", { x: M + CARD_PAD, y: sy, size: 10, font: bold, color: COLOR_TEXT });
+  let sy = sigTop - 14 - 9;
+  page.drawText("Signed by the Parties:", { x: M + 14, y: sy, size: 10, font: bold, color: COLOR_TEXT });
   sy -= 26;
-  const colL = M + CARD_PAD, colR = M + contentW / 2 + 10;
+  const colL = M + 14, colR = M + contentW / 2 + 10;
   if (booking.signature_png) {
     try {
       const png = await doc.embedPng(booking.signature_png);
@@ -366,14 +272,6 @@ export async function buildAgreementPdf(env, booking, logoImageBytes) {
   sy -= 12;
   page.drawText("Contact No.: 85099176", { x: colL, y: sy, size: 8.5, font, color: COLOR_TEXT });
 
-  // Footer "Page X of Y" on every page — Y wasn't known until all pages were laid
-  // out, so it's written in a final pass.
-  const total = pages.length;
-  pages.forEach((p, i) => {
-    const label = `Page ${i + 1} of ${total}`;
-    const w = font.widthOfTextAtSize(label, 9);
-    p.drawText(label, { x: A4[0] / 2 - w / 2, y: 7, size: 9, font, color: rgb(1, 1, 1) });
-  });
-
+  drawPageFooters(pages, font);
   return await doc.save();
 }

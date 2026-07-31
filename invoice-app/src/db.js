@@ -22,14 +22,16 @@ export async function createInvoice(env, d) {
        (seq, invoice_no, token, status,
         client_name, client_phone, client_email, client_nric_uen,
         event_type, venue_space, booking_date, start_time, end_time, hours,
-        hourly_rate, cleaning_fee, deposit_amount, pet_fee, discount, discount_note, rental_total, grand_total,
+        usual_rate, hourly_rate, rental_subtotal, discount_percent,
+        cleaning_fee, deposit_amount, pet_fee, discount, discount_note, rental_total, grand_total,
         rental_fee_note, cleaning_fee_note, deposit_note, pet_fee_note, promo_clause_title, promo_clause_text, promo_id, notes)
      SELECT n,
             'INV-' || printf('%03d', n),
             ?, 'issued',
             ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?,
-            ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?, ?, ?
      FROM (SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM invoices)`
   )
@@ -37,7 +39,8 @@ export async function createInvoice(env, d) {
       token,
       d.client_name, d.client_phone, d.client_email, d.client_nric_uen,
       d.event_type, d.venue_space, d.booking_date, d.start_time, d.end_time, d.hours,
-      d.hourly_rate, d.cleaning_fee, d.deposit_amount, d.pet_fee, d.discount, d.discount_note, d.rental_total, d.grand_total,
+      d.usual_rate ?? null, d.hourly_rate, d.rental_subtotal ?? null, d.discount_percent || 0,
+      d.cleaning_fee, d.deposit_amount, d.pet_fee, d.discount, d.discount_note, d.rental_total, d.grand_total,
       d.rental_fee_note || null, d.cleaning_fee_note || null, d.deposit_note || null, d.pet_fee_note || null,
       d.promo_clause_title || null, d.promo_clause_text || null, d.promo_id || null, d.notes
     )
@@ -88,6 +91,32 @@ export async function setDriveFileIds(env, id, { agreement, bookingInvoice, depo
   ).bind(agreement ?? null, bookingInvoice ?? null, depositInvoice ?? null, id).run();
 }
 
+// Receipts (Addendum 3) — distinct from the invoice Drive file ids above.
+export async function setReceiptFileIds(env, id, { rentalReceipt, depositReceipt }) {
+  await env.DB.prepare(
+    `UPDATE invoices
+     SET drive_rental_receipt_file_id = COALESCE(?, drive_rental_receipt_file_id),
+         drive_deposit_receipt_file_id = COALESCE(?, drive_deposit_receipt_file_id),
+         updated_at = datetime('now')
+     WHERE id=?`
+  ).bind(rentalReceipt ?? null, depositReceipt ?? null, id).run();
+}
+
+// Sets a payment-event timestamp column ONLY if it isn't already set — re-applying
+// the same Telegram command (e.g. "rental paid" twice) should not move the date a
+// second time. `column` is a fixed internal name, never user input, so this is safe
+// to interpolate directly.
+const TIMESTAMP_COLUMNS = new Set([
+  "sent_at", "rental_paid_at", "deposit_paid_at", "deposit_refunded_at",
+  "unsigned_reminder_sent_at", "deposit_reminder_sent_at",
+]);
+export async function markTimestampOnce(env, id, column) {
+  if (!TIMESTAMP_COLUMNS.has(column)) throw new Error("Unknown timestamp column: " + column);
+  await env.DB.prepare(
+    `UPDATE invoices SET ${column} = COALESCE(${column}, datetime('now')), updated_at = datetime('now') WHERE id = ?`
+  ).bind(id).run();
+}
+
 export async function addPayment(env, invoiceId, { amount, kind, paid_on, note }) {
   await env.DB.prepare(
     `INSERT INTO payments (invoice_id, amount, kind, paid_on, note) VALUES (?, ?, ?, ?, ?)`
@@ -108,6 +137,38 @@ export async function setStatus(env, id, { payment_status, cleaning_fee_status, 
 export async function voidInvoice(env, id) {
   await env.DB.prepare(`UPDATE invoices SET status='void', updated_at=datetime('now') WHERE id=?`)
     .bind(id).run();
+}
+
+// ---------------------------------------------------------------------------
+// Daily reminder queries (Addendum 3) — each returns bookings that need a
+// one-time nag; the caller marks the corresponding *_reminder_sent_at column
+// (via markTimestampOnce) right after sending so the same booking isn't
+// re-reported on the next day's cron run.
+// ---------------------------------------------------------------------------
+
+// Sent to the client (sent_at set) 3+ days ago, still not signed, never reminded.
+export async function listUnsignedNeedingReminder(env) {
+  const { results } = await env.DB.prepare(
+    `SELECT * FROM invoices
+     WHERE status = 'issued'
+       AND sent_at IS NOT NULL
+       AND unsigned_reminder_sent_at IS NULL
+       AND datetime(sent_at) <= datetime('now', '-3 days')`
+  ).all();
+  return results;
+}
+
+// Signed, event is within the next 7 days, deposit still not collected, never reminded.
+export async function listDepositsDueNeedingReminder(env) {
+  const { results } = await env.DB.prepare(
+    `SELECT * FROM invoices
+     WHERE status = 'signed'
+       AND deposit_status = 'Not Collected'
+       AND deposit_reminder_sent_at IS NULL
+       AND date(booking_date) <= date('now', '+7 days')
+       AND date(booking_date) >= date('now')`
+  ).all();
+  return results;
 }
 
 // ---------------------------------------------------------------------------

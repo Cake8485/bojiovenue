@@ -12,8 +12,9 @@
     "db:init:local": "wrangler d1 execute bojiovenue-invoice --local --file=./schema.sql"
   },
   "dependencies": {
+    "@pdf-lib/fontkit": "^1.1.1",
     "pdf-lib": "^1.17.1",
-    "@pdf-lib/fontkit": "^1.1.1"
+    "qrcode-generator": "^2.0.4"
   },
   "devDependencies": {
     "wrangler": "^4.110.0"

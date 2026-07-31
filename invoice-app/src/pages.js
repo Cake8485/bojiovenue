@@ -31,6 +31,8 @@ export function signPage(env, token) {
  .agreement p{font-size:11.5px;line-height:1.5;color:#2F0B5D;margin:0 0 7px}
  .agreement p.a-bold{font-weight:700}
  .agreement p:last-child{margin-bottom:0}
+ .qr-wrap{text-align:center}
+ .qr-wrap svg{width:200px;height:200px;max-width:100%}
 </style></head>
 <body><div class="wrap"><div id="app" class="muted" style="padding:28px;text-align:center">Loading…</div></div>
 <script>
@@ -69,7 +71,10 @@ function render(signed){
    (signed
      ? '<div class="card"><b>✅ Signed.</b><div class="muted">Thank you — your booking and deposit invoice have been filed. You may close this page.</div>'+
          '<a href="/sign/'+TOKEN+'/download" style="display:block;text-align:center;background:#111;color:#fff;border-radius:10px;padding:14px;font-size:16px;margin-top:12px;text-decoration:none">Download your copy (PDF)</a>'+
-       '</div>'
+       '</div>'+
+       (inv.payment_due
+         ? '<div class="card qr-wrap"><div class="muted" style="margin-bottom:8px">Scan to pay via PayNow — '+inv.payment_due.label+': '+money(inv.payment_due.amount)+'</div>'+inv.payment_due.qr_svg+'</div>'
+         : '')
      : '<div class="card">'+
          '<label>Your full name</label><input id="name" autocomplete="name" placeholder="Full name" />'+
          '<label>Signature</label><canvas id="pad"></canvas>'+
@@ -172,11 +177,12 @@ export function adminPage(env) {
      <div><label>Hours (min 4)</label><input id="hours" type="number" value="4" min="1" step="0.5"></div>
      <div><label>Start time</label><input id="start_time" type="time"></div>
      <div><label>End time</label><input id="end_time" type="time"></div>
-     <div><label>Hourly rate (blank = auto by rate card)</label><input id="hourly_rate" type="number" placeholder="auto"></div>
+     <div><label>Rate / Package rate ($/hr) <span class="muted">(Social: blank = usual weekday/weekend rate. Corporate: blank = auto by rate card)</span></label><input id="hourly_rate" type="number" placeholder="auto"></div>
+     <div><label>Discount % <span class="muted">(Social only — plain number, e.g. 10. Leave blank for none; a promo may suggest one)</span></label><input id="discount_percent" type="number" placeholder="0"></div>
      <div><label>Cleaning fee (blank = auto by event type)</label><input id="cleaning_fee" type="number" placeholder="auto"></div>
      <div><label>Refundable deposit (blank = default by event type)</label><input id="deposit_amount" type="number" placeholder="auto"></div>
      <div><label>&nbsp;</label><label style="display:flex;align-items:center;gap:6px;margin-top:9px"><input type="checkbox" id="has_pet" style="width:auto"> Pets present (+$100 cleaning)</label></div>
-     <div><label>Discount / promo <span class="muted">(e.g. "10% off", "$50 off" — leave blank for none)</span></label><input id="discount_note"></div>
+     <div><label>Discount / promo <span class="muted">(Corporate/Seminar only — e.g. "10% off", "$50 off". Leave blank for none)</span></label><input id="discount_note"></div>
      <div><label>Notes</label><input id="notes"></div>
    </div>
 
@@ -289,7 +295,7 @@ document.getElementById('create').onclick=async()=>{
   const body={client_name:val('client_name'),client_nric_uen:val('client_nric_uen'),client_phone:val('client_phone'),client_email:val('client_email'),
     event_type:val('event_type'),venue_space:val('venue_space'),booking_date:val('booking_date'),hours:val('hours'),
     start_time:val('start_time'),end_time:val('end_time'),
-    hourly_rate:val('hourly_rate'),cleaning_fee:val('cleaning_fee'),deposit_amount:val('deposit_amount'),
+    hourly_rate:val('hourly_rate'),discount_percent:val('discount_percent'),cleaning_fee:val('cleaning_fee'),deposit_amount:val('deposit_amount'),
     pet_fee:document.getElementById('has_pet').checked?100:0,discount_text:val('discount_note'),
     rental_fee_note:val('rental_fee_note'),cleaning_fee_note:val('cleaning_fee_note'),deposit_note:val('deposit_note'),
     promo_clause_title:val('promo_clause_title'),promo_clause_text:val('promo_clause_text'),
