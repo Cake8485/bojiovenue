@@ -122,6 +122,118 @@ load();
 </script></body></html>`;
 }
 
+// Deduction addendum acknowledgment (Addendum 4) — deliberately near-identical to
+// signPage above (same canvas-signature UI, same load/render/initPad shape) since
+// Kenneth described this as using "the SAME link-signing system as the agreement."
+export function addendumPage(env, token) {
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Security Deposit Deduction — BojioVenue</title>
+<style>
+ *{box-sizing:border-box}
+ body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;background:#f4f4f6;color:#16161a}
+ .wrap{max-width:640px;margin:0 auto;padding:16px}
+ .card{background:#fff;border-radius:12px;padding:18px 20px;margin:14px 0;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+ h1{font-size:22px;margin:2px 0}
+ .muted{color:#6b6b73;font-size:13px}
+ .row{display:flex;justify-content:space-between;gap:10px;padding:6px 0;font-size:14px}
+ .row.total{font-weight:700;border-top:1px solid #e6e6ea;margin-top:6px;padding-top:10px}
+ canvas{border:1px dashed #b9b9c2;border-radius:10px;width:100%;height:190px;touch-action:none;background:#fff;display:block}
+ label{display:block;font-size:13px;color:#6b6b73;margin:10px 0 4px}
+ input{width:100%;padding:11px;border:1px solid #cfcfd6;border-radius:8px;font-size:16px}
+ button{background:#111;color:#fff;border:0;border-radius:10px;padding:14px;font-size:16px;width:100%;margin-top:12px;cursor:pointer}
+ button.sec{background:#ececef;color:#333;padding:8px 14px;font-size:13px;width:auto;margin-top:8px}
+ #msg{margin-top:10px;font-size:13px}
+ .agreement{max-height:460px;overflow-y:auto;border-radius:10px;padding:14px;background:#93C6D9}
+ .agreement .a-card{background:#FFDE58;border-radius:10px;padding:12px 16px;margin:0 0 10px}
+ .agreement h3{font-size:12.5px;margin:0 0 6px;color:#2F0B5D;font-weight:700}
+ .agreement p{font-size:11.5px;line-height:1.5;color:#2F0B5D;margin:0 0 7px}
+ .agreement p.a-bold{font-weight:700}
+ .agreement p:last-child{margin-bottom:0}
+</style></head>
+<body><div class="wrap"><div id="app" class="muted" style="padding:28px;text-align:center">Loading…</div></div>
+<script>
+const TOKEN=${esc(token)};
+const BIZ=${esc(env.BUSINESS_NAME || "BojioVenue")};
+const app=document.getElementById('app');
+let data=null;
+const money=n=>'$'+Number(n||0).toFixed(2);
+
+async function load(){
+  const r=await fetch('/api/addendum/'+TOKEN);
+  if(!r.ok){
+    const d=await r.json().catch(()=>({}));
+    app.className='';
+    app.innerHTML='<div class="card" style="text-align:center"><b>⚠️ Unavailable</b>'+
+      '<div class="muted" style="margin-top:6px">'+(d.error||'This link is invalid.')+'</div></div>';
+    return;
+  }
+  data=(await r.json()).deduction;
+  render(data.status==='acknowledged');
+}
+
+function render(acknowledged){
+  app.className='';
+  app.innerHTML=
+   '<div class="card"><div class="muted">'+BIZ+' · Security Deposit Deduction Addendum</div>'+
+     '<h1>'+data.invoice_no+'</h1>'+
+     '<div class="muted">'+data.event_type+' event · '+data.venue_space+' · '+data.booking_date+'</div>'+
+     '<div class="row total"><span>Deduction amount</span><span>'+money(data.amount)+'</span></div>'+
+     '<div class="row muted"><span>Balance refundable</span><span>'+money(data.balance_refundable)+'</span></div>'+
+   '</div>'+
+   '<div class="card">'+
+     '<div class="muted" style="margin-bottom:8px">Please read the addendum below, then acknowledge to confirm.</div>'+
+     '<div class="agreement">'+data.addendum_html+'</div>'+
+   '</div>'+
+   (acknowledged
+     ? '<div class="card"><b>✅ Acknowledged.</b><div class="muted">Thank you — this has been recorded. The balance refundable will be paid out within 3 working days. You may close this page.</div></div>'
+     : '<div class="card">'+
+         '<label>Your full name</label><input id="name" autocomplete="name" placeholder="Full name" />'+
+         '<label>Signature</label><canvas id="pad"></canvas>'+
+         '<button class="sec" type="button" id="clear">Clear</button>'+
+         '<button id="submit">Acknowledge</button>'+
+         '<div id="msg" class="muted"></div>'+
+       '</div>');
+  if(!acknowledged) initPad();
+}
+
+function initPad(){
+  const c=document.getElementById('pad');
+  const ratio=Math.max(window.devicePixelRatio||1,1);
+  c.width=c.offsetWidth*ratio; c.height=c.offsetHeight*ratio;
+  const ctx=c.getContext('2d');
+  ctx.scale(ratio,ratio);
+  ctx.lineWidth=2.2; ctx.lineCap='round'; ctx.lineJoin='round'; ctx.strokeStyle='#111';
+  let drawing=false,last=null,dirty=false;
+  const pos=e=>{const r=c.getBoundingClientRect();const t=e.touches?e.touches[0]:e;return{x:t.clientX-r.left,y:t.clientY-r.top};};
+  const start=e=>{drawing=true;last=pos(e);e.preventDefault();};
+  const move=e=>{ if(!drawing)return; const p=pos(e);
+    ctx.beginPath(); ctx.moveTo(last.x,last.y);
+    const mx=(last.x+p.x)/2,my=(last.y+p.y)/2;
+    ctx.quadraticCurveTo(last.x,last.y,mx,my); ctx.stroke();
+    last=p; dirty=true; e.preventDefault(); };
+  const end=()=>{drawing=false;};
+  c.addEventListener('mousedown',start); c.addEventListener('mousemove',move); window.addEventListener('mouseup',end);
+  c.addEventListener('touchstart',start,{passive:false}); c.addEventListener('touchmove',move,{passive:false}); c.addEventListener('touchend',end);
+  document.getElementById('clear').onclick=()=>{ctx.clearRect(0,0,c.width,c.height);dirty=false;};
+  document.getElementById('submit').onclick=async()=>{
+    const name=document.getElementById('name').value.trim();
+    const msg=document.getElementById('msg');
+    if(!name){msg.textContent='Please enter your name.';return;}
+    if(!dirty){msg.textContent='Please sign in the box above.';return;}
+    msg.textContent='Submitting…';
+    const png=c.toDataURL('image/png');
+    const r=await fetch('/api/addendum/'+TOKEN,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({acknowledger_name:name,signature_png:png})});
+    const d=await r.json().catch(()=>({}));
+    if(r.ok){ data.status='acknowledged'; render(true); }
+    else { msg.textContent=(d.error||'Something went wrong.'); }
+  };
+}
+load();
+</script></body></html>`;
+}
+
 export function adminPage(env) {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">

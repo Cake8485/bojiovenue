@@ -57,24 +57,24 @@ async function findFileInFolder(accessToken, folderId, name) {
   return data.files && data.files[0] ? data.files[0].id : null;
 }
 
-function multipartBody(boundary, metadata, pdfBytes) {
+function multipartBody(boundary, metadata, bytes, mimeType) {
   const enc = new TextEncoder();
   const pre = enc.encode(
     `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n` +
       JSON.stringify(metadata) +
-      `\r\n--${boundary}\r\nContent-Type: application/pdf\r\n\r\n`
+      `\r\n--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n`
   );
   const post = enc.encode(`\r\n--${boundary}--`);
-  const out = new Uint8Array(pre.length + pdfBytes.length + post.length);
+  const out = new Uint8Array(pre.length + bytes.length + post.length);
   out.set(pre, 0);
-  out.set(pdfBytes, pre.length);
-  out.set(post, pre.length + pdfBytes.length);
+  out.set(bytes, pre.length);
+  out.set(post, pre.length + bytes.length);
   return out;
 }
 
-async function createFile(accessToken, folderId, filename, pdfBytes) {
+async function createFile(accessToken, folderId, filename, bytes, mimeType) {
   const boundary = "bojio" + crypto.randomUUID().replace(/-/g, "");
-  const body = multipartBody(boundary, { name: filename, parents: [folderId] }, pdfBytes);
+  const body = multipartBody(boundary, { name: filename, parents: [folderId] }, bytes, mimeType);
   const res = await fetch(`${UPLOAD_URL}?uploadType=multipart&fields=id,name,webViewLink`, {
     method: "POST",
     headers: {
@@ -87,27 +87,30 @@ async function createFile(accessToken, folderId, filename, pdfBytes) {
   return res.json();
 }
 
-async function replaceMedia(accessToken, fileId, pdfBytes) {
+async function replaceMedia(accessToken, fileId, bytes, mimeType) {
   const res = await fetch(
     `${UPLOAD_URL}/${fileId}?uploadType=media&fields=id,name,webViewLink`,
     {
       method: "PATCH",
-      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/pdf" },
-      body: pdfBytes,
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": mimeType },
+      body: bytes,
     }
   );
   if (!res.ok) throw new Error("Drive replace failed: " + (await res.text()));
   return res.json();
 }
 
-// Upload a PDF into the month folder. If a file with the same name already exists
-// (e.g. re-filing after a status change), its contents are replaced in place so the
-// filed document always reflects the latest status — no duplicates.
-export async function fileToDrive(env, { monthName, filename, pdfBytes }) {
+// Upload a file into the month folder. If a file with the same name already exists
+// (e.g. re-filing after a status change, or Kenneth re-sending a refund screenshot),
+// its contents are replaced in place so the filed document always reflects the
+// latest version — no duplicates. `mimeType` defaults to PDF since that's still
+// almost every caller; Addendum 4's refund-proof screenshots pass "image/jpeg".
+export async function fileToDrive(env, { monthName, filename, pdfBytes, mimeType }) {
   const accessToken = await getAccessToken(env);
   const folderId = await ensureMonthFolder(accessToken, env.DRIVE_PARENT_FOLDER_ID, monthName);
   const existing = await findFileInFolder(accessToken, folderId, filename);
+  const type = mimeType || "application/pdf";
   return existing
-    ? replaceMedia(accessToken, existing, pdfBytes)
-    : createFile(accessToken, folderId, filename, pdfBytes);
+    ? replaceMedia(accessToken, existing, pdfBytes, type)
+    : createFile(accessToken, folderId, filename, pdfBytes, type);
 }

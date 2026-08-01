@@ -118,6 +118,12 @@ CREATE TABLE IF NOT EXISTS invoices (
   -- booking every day once the threshold is crossed.
   unsigned_reminder_sent_at  TEXT,
   deposit_reminder_sent_at   TEXT,
+  refund_reminder_sent_at    TEXT,  -- added Addendum 4: event past, deposit held, refund overdue (Clause 8.1)
+
+  -- Refund proof (added Addendum 4) — Kenneth forwards his bank transfer screenshot
+  -- to the bot after paying out (Path A, or the balance after a deduction); filed to
+  -- the same month folder as everything else for this booking.
+  drive_refund_proof_file_id TEXT,
 
   created_at           TEXT    NOT NULL DEFAULT (datetime('now')),
   updated_at           TEXT    NOT NULL DEFAULT (datetime('now'))
@@ -137,6 +143,33 @@ CREATE TABLE IF NOT EXISTS payments (
 CREATE INDEX IF NOT EXISTS idx_payments_invoice ON payments(invoice_id);
 CREATE INDEX IF NOT EXISTS idx_invoices_booking ON invoices(booking_date);
 CREATE INDEX IF NOT EXISTS idx_invoices_status  ON invoices(status);
+
+-- Security Deposit Deductions (added Addendum 4, 2026-08-17) — Clause 8.3/8.4's
+-- "Security Deposit Deduction Addendum". A booking can have MORE than one (damage
+-- discovered over a few days is plausible), so this is its own table rather than
+-- columns on invoices. Each deduction gets its own signing-style acknowledgment
+-- link (SAME canvas-signature UI as the Agreement, per Kenneth's own description),
+-- and its "balance refundable" line accounts for any earlier deductions on the same
+-- booking (see deductions.js's running-balance calc), not just itself in isolation.
+-- After acknowledgment, the balance is due within 3 working days (Clause 8.4); the
+-- actual payout still goes through the SAME "INV-XXX refunded" + screenshot flow as
+-- a plain no-deduction refund — this table only tracks the deduction paperwork, not
+-- the payout itself (that's deposit_status/deposit_refunded_at on invoices).
+CREATE TABLE IF NOT EXISTS deductions (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  invoice_id        INTEGER NOT NULL REFERENCES invoices(id),
+  token             TEXT    NOT NULL UNIQUE,          -- unguessable acknowledgment-link token
+  amount            REAL    NOT NULL,
+  reason             TEXT    NOT NULL,                 -- breach nature / remarks, from "INV-XXX deduct 150 reason: ..."
+  status             TEXT    NOT NULL DEFAULT 'pending', -- pending | acknowledged
+  signature_png      TEXT,                              -- captured the same way as the Agreement's signature
+  acknowledger_name  TEXT,
+  acknowledged_at    TEXT,
+  drive_file_id      TEXT,                              -- filed to Drive only once acknowledged, matching the Agreement's own "signed record" precedent
+  reminder_sent_at   TEXT,                               -- one-time "balance due" cron marker (Clause 8.4, 3 working days after acknowledged_at)
+  created_at         TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_deductions_invoice ON deductions(invoice_id);
 
 -- Staging area for the Telegram "confirm before creating anything" flow. A parsed
 -- + priced booking is held here (NOT yet an invoice, no number burned) until Kenneth

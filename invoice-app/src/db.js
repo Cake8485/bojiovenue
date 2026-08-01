@@ -56,6 +56,10 @@ export function getInvoiceByNo(env, no) {
   return env.DB.prepare(`SELECT * FROM invoices WHERE invoice_no = ?`).bind(no).first();
 }
 
+export function getInvoiceById(env, id) {
+  return env.DB.prepare(`SELECT * FROM invoices WHERE id = ?`).bind(id).first();
+}
+
 export async function listInvoices(env) {
   const { results } = await env.DB.prepare(
     `SELECT id, seq, invoice_no, token, status, client_name, event_type, venue_space, booking_date,
@@ -108,7 +112,7 @@ export async function setReceiptFileIds(env, id, { rentalReceipt, depositReceipt
 // to interpolate directly.
 const TIMESTAMP_COLUMNS = new Set([
   "sent_at", "rental_paid_at", "deposit_paid_at", "deposit_refunded_at",
-  "unsigned_reminder_sent_at", "deposit_reminder_sent_at",
+  "unsigned_reminder_sent_at", "deposit_reminder_sent_at", "refund_reminder_sent_at",
 ]);
 export async function markTimestampOnce(env, id, column) {
   if (!TIMESTAMP_COLUMNS.has(column)) throw new Error("Unknown timestamp column: " + column);
@@ -139,6 +143,54 @@ export async function voidInvoice(env, id) {
     .bind(id).run();
 }
 
+// Refund proof screenshot (Addendum 4) — filed once, whichever refund path led here.
+export async function setRefundProofFileId(env, id, fileId) {
+  await env.DB.prepare(
+    `UPDATE invoices SET drive_refund_proof_file_id = ?, updated_at = datetime('now') WHERE id = ?`
+  ).bind(fileId, id).run();
+}
+
+// ---------------------------------------------------------------------------
+// Security deposit deductions (Addendum 4) — see schema.sql for why this is its
+// own table rather than columns on invoices (a booking can have more than one).
+// ---------------------------------------------------------------------------
+export async function createDeduction(env, invoiceId, { amount, reason }) {
+  const token = randomToken();
+  const { meta } = await env.DB.prepare(
+    `INSERT INTO deductions (invoice_id, token, amount, reason) VALUES (?, ?, ?, ?)`
+  ).bind(invoiceId, token, amount, reason).run();
+  return env.DB.prepare(`SELECT * FROM deductions WHERE id = ?`).bind(meta.last_row_id).first();
+}
+
+export function getDeductionByToken(env, token) {
+  return env.DB.prepare(`SELECT * FROM deductions WHERE token = ?`).bind(token).first();
+}
+
+export async function listDeductionsForInvoice(env, invoiceId) {
+  const { results } = await env.DB.prepare(
+    `SELECT * FROM deductions WHERE invoice_id = ? ORDER BY id ASC`
+  ).bind(invoiceId).all();
+  return results;
+}
+
+export async function acknowledgeDeduction(env, id, { signature_png, acknowledger_name }) {
+  await env.DB.prepare(
+    `UPDATE deductions
+     SET status = 'acknowledged', signature_png = ?, acknowledger_name = ?, acknowledged_at = datetime('now')
+     WHERE id = ?`
+  ).bind(signature_png, acknowledger_name, id).run();
+}
+
+export async function setDeductionDriveFileId(env, id, fileId) {
+  await env.DB.prepare(`UPDATE deductions SET drive_file_id = ? WHERE id = ?`).bind(fileId, id).run();
+}
+
+export async function markDeductionReminderSent(env, id) {
+  await env.DB.prepare(
+    `UPDATE deductions SET reminder_sent_at = COALESCE(reminder_sent_at, datetime('now')) WHERE id = ?`
+  ).bind(id).run();
+}
+
 // ---------------------------------------------------------------------------
 // Daily reminder queries (Addendum 3) — each returns bookings that need a
 // one-time nag; the caller marks the corresponding *_reminder_sent_at column
@@ -167,6 +219,39 @@ export async function listDepositsDueNeedingReminder(env) {
        AND deposit_reminder_sent_at IS NULL
        AND date(booking_date) <= date('now', '+7 days')
        AND date(booking_date) >= date('now')`
+  ).all();
+  return results;
+}
+
+// Event already happened, deposit still held (not refunded), no deduction ever
+// filed for it (a deduction in progress is a different situation — see
+// listDeductionsNeedingBalanceReminder below), never reminded. The actual
+// "4+ working days" threshold (Clause 8.1's 5-7 day promise) is checked by the
+// caller — SQLite has no clean working-day arithmetic, so this returns candidates
+// by calendar date and the caller filters with pricing.js-style Mon-Fri counting.
+export async function listUnrefundedPastEvent(env) {
+  const { results } = await env.DB.prepare(
+    `SELECT i.* FROM invoices i
+     WHERE i.status = 'signed'
+       AND i.deposit_status = 'Held'
+       AND i.refund_reminder_sent_at IS NULL
+       AND date(i.booking_date) < date('now')
+       AND NOT EXISTS (SELECT 1 FROM deductions d WHERE d.invoice_id = i.id)`
+  ).all();
+  return results;
+}
+
+// Deduction acknowledged, balance not yet paid out, never reminded. Same
+// caller-side working-day filtering as listUnrefundedPastEvent above (Clause 8.4's
+// 3-working-day promise, timed from acknowledged_at not the event date).
+export async function listDeductionsNeedingBalanceReminder(env) {
+  const { results } = await env.DB.prepare(
+    `SELECT d.*, i.invoice_no, i.client_name, i.deposit_status, i.token
+     FROM deductions d
+     JOIN invoices i ON i.id = d.invoice_id
+     WHERE d.status = 'acknowledged'
+       AND d.reminder_sent_at IS NULL
+       AND i.deposit_status != 'Refunded'`
   ).all();
   return results;
 }

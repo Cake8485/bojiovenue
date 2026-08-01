@@ -72,3 +72,20 @@ export async function sendTelegramDocument(env, chatId, filename, pdfBytes, capt
   if (!res.ok) console.log("[notify] sendDocument failed: " + (await res.text()));
   return res;
 }
+
+// Downloads the actual bytes of an inbound Telegram photo (Addendum 4 — Kenneth
+// forwards his bank transfer screenshot for a refund payout). Telegram's `photo`
+// field on a message is an array of the same image at different resolutions; the
+// caller should pass the LARGEST one's file_id (last in the array) for the best
+// quality. Two-step API: getFile resolves file_id -> file_path, then the file
+// itself is served from a *different* (non-`/bot`) URL prefix.
+export async function getTelegramPhotoBytes(env, fileId) {
+  const infoRes = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/getFile?file_id=${fileId}`);
+  if (!infoRes.ok) throw new Error("Telegram getFile failed: " + (await infoRes.text()));
+  const info = await infoRes.json();
+  const filePath = info.result && info.result.file_path;
+  if (!filePath) throw new Error("Telegram getFile returned no file_path");
+  const fileRes = await fetch(`https://api.telegram.org/file/bot${env.TELEGRAM_BOT_TOKEN}/${filePath}`);
+  if (!fileRes.ok) throw new Error("Telegram file download failed: " + (await fileRes.text()));
+  return new Uint8Array(await fileRes.arrayBuffer());
+}
