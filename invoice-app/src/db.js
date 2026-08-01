@@ -350,6 +350,17 @@ export async function deletePendingBooking(env, id) {
   await env.DB.prepare(`DELETE FROM pending_bookings WHERE id = ?`).bind(id).run();
 }
 
+// All bookings awaiting Confirm/Cancel for this chat (there can legitimately be
+// more than one — see telegramWaTemplateMessage's pending-booking warning, added
+// after a 2026-08-02 bug report). Newest first, so the most recent is the one
+// most likely relevant to whatever Kenneth's asking about.
+export async function listPendingBookings(env, chatId) {
+  const { results } = await env.DB.prepare(
+    `SELECT id, data FROM pending_bookings WHERE chat_id = ? ORDER BY id DESC`
+  ).bind(String(chatId)).all();
+  return results.map((r) => ({ ...r, data: JSON.parse(r.data) }));
+}
+
 // ---------------------------------------------------------------------------
 // Addendum 7 — WhatsApp-quote-template accumulation (see schema.sql). One row
 // per chat_id; each of the 3 field groups is NULL until that message type has

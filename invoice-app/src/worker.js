@@ -40,6 +40,10 @@ import { payNowQrSvg, invoicePayNowPayload } from "./paynow.js";
 import { fileToDrive, ensureBookingFolder, ensureSubfolder, moveFolder, renameFolder, getAccessToken } from "./drive.js";
 import { notifySigned, sendTelegram, answerCallbackQuery, sendTelegramDocument, getTelegramPhotoBytes, waLink } from "./notify.js";
 import { adminPage, signPage, addendumPage } from "./pages.js";
+import {
+  parseTelegramTemplate, parseFlexibleDate, parseLooseNumber,
+  detectWaTemplateType, parseWaEventDetails, parseWaQuote, parseWaParticulars, waAccumulationToFields, WA_GROUP_LABELS,
+} from "./parsing.js";
 
 const json = (data, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
@@ -469,33 +473,46 @@ async function telegramWebhook(env, ctx, request) {
     return json({ ok: true }); // silently ignore — don't leak that this endpoint does anything
   }
 
-  // Refund-proof screenshots (Addendum 4) — Kenneth attaches the photo with the
-  // booking number as its caption. No text field on a photo message, so this has
-  // to be checked before the text-only handling below.
-  if (msg.photo && msg.photo.length) return telegramRefundProofPhoto(env, chatId, msg);
+  // Everything past this point is wrapped in one try/catch as a deliberate
+  // backstop (2026-08-02 bug report: a message went completely silent — no
+  // reply at all — because one of the newer handlers below didn't have its own
+  // try/catch, so an exception died without ever reaching sendTelegram). Going
+  // silent is never acceptable: Kenneth must always get SOME reply, even if it's
+  // just "something broke." Individual handlers may still catch their own errors
+  // for a more specific message; this only fires for whatever they miss.
+  try {
+    // Refund-proof screenshots (Addendum 4) — Kenneth attaches the photo with the
+    // booking number as its caption. No text field on a photo message, so this
+    // has to be checked before the text-only handling below.
+    if (msg.photo && msg.photo.length) return await telegramRefundProofPhoto(env, chatId, msg);
 
-  if (!msg.text) return json({ ok: true }); // ignore stickers, voice notes, etc.
+    if (!msg.text) return json({ ok: true }); // ignore stickers, voice notes, etc.
 
-  const templateMatch = msg.text.trim().match(SET_TEMPLATE_RE);
-  if (templateMatch) return telegramSetTemplate(env, chatId, templateMatch[1].toLowerCase(), templateMatch[2].trim());
+    const templateMatch = msg.text.trim().match(SET_TEMPLATE_RE);
+    if (templateMatch) return await telegramSetTemplate(env, chatId, templateMatch[1].toLowerCase(), templateMatch[2].trim());
 
-  const statusMatch = msg.text.match(BOOKING_REF_LINE_RE);
-  if (statusMatch) return telegramStatusUpdate(env, chatId, statusMatch[1], statusMatch[2]);
+    const statusMatch = msg.text.match(BOOKING_REF_LINE_RE);
+    if (statusMatch) return await telegramStatusUpdate(env, chatId, statusMatch[1], statusMatch[2]);
 
-  // Addendum 7 — a COMPLETE strict-template message (§5a, kept as a fallback per
-  // Kenneth's instruction — "it's already built") always wins even though it
-  // shares a label ("Date of Event:") with the WA event-details template (§5b):
-  // checked first, since a lone WA event-details message never also carries
-  // "Name:" — only a genuinely complete §5a message has both in one shot.
-  const strictFields = parseTelegramTemplate(msg.text);
-  if (!(strictFields.name && strictFields["date of event"])) {
-    // Not a complete strict template — WhatsApp-forwarded quote templates are
-    // the PRIMARY booking-intake path now (§5b), tried next.
-    const waTemplateType = detectWaTemplateType(msg.text);
-    if (waTemplateType) return telegramWaTemplateMessage(env, chatId, msg.text, waTemplateType);
+    // Addendum 7 — a COMPLETE strict-template message (§5a, kept as a fallback
+    // per Kenneth's instruction — "it's already built") always wins even though
+    // it shares a label ("Date of Event:") with the WA event-details template
+    // (§5b): checked first, since a lone WA event-details message never also
+    // carries "Name:" — only a genuinely complete §5a message has both in one shot.
+    const strictFields = parseTelegramTemplate(msg.text);
+    if (!(strictFields.name && strictFields["date of event"])) {
+      // Not a complete strict template — WhatsApp-forwarded quote templates are
+      // the PRIMARY booking-intake path now (§5b), tried next.
+      const waTemplateType = detectWaTemplateType(msg.text);
+      if (waTemplateType) return await telegramWaTemplateMessage(env, chatId, msg.text, waTemplateType);
+    }
+
+    return await telegramNewBooking(env, chatId, msg.text);
+  } catch (e) {
+    console.log("[telegram] unhandled error routing message", e && (e.stack || e.message || e));
+    await sendTelegram(env, chatId, `⚠️ Something went wrong reading that message: ${String((e && e.message) || e)}\n\nNothing was changed — please try again or check /admin.`);
+    return json({ ok: true });
   }
-
-  return telegramNewBooking(env, chatId, msg.text);
 }
 
 async function telegramSetTemplate(env, chatId, key, body) {
@@ -573,7 +590,18 @@ async function stageBookingForConfirm(env, chatId, fields) {
     }
 
     const start_time = fields["time start"] || null;
-    const hours = Number(fields["duration"]) || 4;
+    // 2026-08-02 bug report: "8hours" (a real WhatsApp-forward value) parsed as
+    // Number("8hours") = NaN, which silently fell back to the 4-hour default —
+    // a WRONG price with no warning. Blank/omitted still means "use 4h", same as
+    // before; a value that WAS given but couldn't be read now blocks with an
+    // error instead of guessing, matching how an unparseable date is handled.
+    const durationRaw = fields["duration"];
+    const durationParsed = parseLooseNumber(durationRaw);
+    if (durationRaw && durationParsed === null) {
+      await sendTelegram(env, chatId, `⚠️ Couldn't read the duration "${durationRaw}" as a number of hours — please clarify (e.g. "8" or "8 hours").`);
+      return json({ ok: true });
+    }
+    const hours = durationParsed ?? 4;
     const end_time = start_time ? addHours(start_time, hours) : null;
     const client_nric_uen = fields["nric/uen"] || fields["nric"] || fields["uen"] || null;
     // Addendum 6: which payment the cleaning fee is billed with — defaults to
@@ -583,16 +611,23 @@ async function stageBookingForConfirm(env, chatId, fields) {
     // Social: dedicated Rate:/Discount: fields feed the usual/package/discount%
     // model directly. Corporate/Seminar: unchanged free-text Other: field, parsed
     // as a flat $ discount — that engine has no percent-discount concept.
-    const manualRate = fields["rate"] !== undefined && fields["rate"] !== "" ? Number(fields["rate"]) : undefined;
+    // parseLooseNumber (not plain Number()) so a WhatsApp-forward's "$150/-"-style
+    // formatting doesn't silently produce NaN/undefined — 2026-08-02 bug report.
+    const manualRate = parseLooseNumber(fields["rate"]) ?? undefined;
+    // cleaning_fee/deposit_amount from the Quote template (if provided) are real
+    // overrides pricing.js already supports — previously parsed but discarded;
+    // now actually used, so a real quote's numbers match what gets billed.
+    const manualCleaningFee = parseLooseNumber(fields["cleaning fee"]) ?? undefined;
+    const manualDeposit = parseLooseNumber(fields["deposit"]) ?? undefined;
     let q, discountNote;
     if (event_type === "Social") {
       const discount_percent = fields["discount"] ? parsePercent(fields["discount"]) : undefined;
-      q = await computeQuoteWithPromo(env, { event_type, venue_space, booking_date, hours, hourly_rate: manualRate, discount_percent });
+      q = await computeQuoteWithPromo(env, { event_type, venue_space, booking_date, hours, hourly_rate: manualRate, discount_percent, cleaning_fee: manualCleaningFee, deposit_amount: manualDeposit });
       discountNote = q.discount_percent > 0 ? `${q.discount_percent}% discount` : null;
     } else {
-      const preDiscount = await computeQuoteWithPromo(env, { event_type, venue_space, booking_date, hours, hourly_rate: manualRate });
+      const preDiscount = await computeQuoteWithPromo(env, { event_type, venue_space, booking_date, hours, hourly_rate: manualRate, cleaning_fee: manualCleaningFee, deposit_amount: manualDeposit });
       const disc = parseDiscount(fields["other"], preDiscount.grand_total);
-      q = await computeQuoteWithPromo(env, { event_type, venue_space, booking_date, hours, hourly_rate: manualRate, discount: disc.amount });
+      q = await computeQuoteWithPromo(env, { event_type, venue_space, booking_date, hours, hourly_rate: manualRate, discount: disc.amount, cleaning_fee: manualCleaningFee, deposit_amount: manualDeposit });
       discountNote = disc.note || null;
     }
 
@@ -635,111 +670,32 @@ async function stageBookingForConfirm(env, chatId, fields) {
   return json({ ok: true });
 }
 
-// Accepts YYYY-MM-DD (§5a's strict format) or "D Mon YYYY" / "DD Mon YYYY" (more
-// likely from a real WhatsApp forward, per §5b) — returns YYYY-MM-DD or null if
-// neither matches. Deliberately narrow: an ambiguous format (e.g. 08/09, which
-// could be Aug 9 or Sep 8) is left unparsed rather than guessed at, same
-// reasoning as the rest of this file's discount/date handling.
-const MONTH_NAMES = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
-function parseFlexibleDate(raw) {
-  const s = String(raw || "").trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-  const m = s.match(/^(\d{1,2})\s+([A-Za-z]{3,})\s+(\d{4})$/);
-  if (m) {
-    const month = MONTH_NAMES.indexOf(m[2].slice(0, 3).toLowerCase());
-    if (month >= 0) return `${m[3]}-${String(month + 1).padStart(2, "0")}-${String(m[1]).padStart(2, "0")}`;
-  }
-  return null;
-}
-
-// ---------------------------------------------------------------------------
-// Addendum 7 (2026-08-01) — WhatsApp-quote-template accumulation, §5b. Kenneth
-// forwards his existing WhatsApp templates verbatim as up to 3 separate
-// messages; this detects which of the 3 a given message is and merges it into
-// a per-chat accumulation (pending_wa_accumulation) until all 3 have arrived.
-//
-// ⚠ PROVISIONAL: the label text/regexes below are my best-effort match against
-// the ABSTRACTED label list in SPEC.md §5b, not yet verified against a real
-// forwarded message (still waiting on that from Kenneth — see SPEC.md's open
-// item). Expect to refine once real examples arrive; until then a field that
-// doesn't confidently parse is reported back as missing rather than guessed at.
-// ---------------------------------------------------------------------------
-const WA_GROUP_LABELS = { event_details: "Event details", quote: "Quote", particulars: "Particulars" };
-
-function detectWaTemplateType(text) {
-  if (/date\s*of\s*event/i.test(text)) return "event_details";
-  if (/usual\s*rate/i.test(text) || /final\s*price/i.test(text)) return "quote";
-  if (/name\s*of\s*host/i.test(text) || /last\s*4\s*digit/i.test(text)) return "particulars";
-  return null;
-}
-
-function parseWaEventDetails(text) {
-  const f = parseTelegramTemplate(text);
-  return {
-    date_of_event: f["date of event"] || null,
-    hours: f["no. of hours"] || f["no of hours"] || null,
-    start_time: f["start time of event"] || null,
-    event_type: f["type of event"] || null,
-  };
-}
-
-function parseWaQuote(text) {
-  const f = parseTelegramTemplate(text);
-  const packageMatch = text.match(/package\s+(\d+(?:\.\d+)?)\s*hours?\s*:\s*\$?\s*(\d+(?:\.\d+)?)\s*\/\s*hr/i);
-  const discountMatch = text.match(/discount\s+(\d+(?:\.\d+)?)\s*%/i);
-  return {
-    usual_rate: f["usual rate"] || null,
-    package_hours: packageMatch ? packageMatch[1] : null,
-    package_rate: packageMatch ? packageMatch[2] : null,
-    total: f["total"] || null,
-    discount_percent: discountMatch ? discountMatch[1] : null,
-    final_price: f["final price"] || null,
-    cleaning_fee: f["cleaning fee"] || null,
-    deposit_amount: f["deposit"] || f["security deposit"] || null,
-  };
-}
-
-function parseWaParticulars(text) {
-  const f = parseTelegramTemplate(text);
-  return {
-    name: f["name of host (as in nric)/ company"] || f["name of host"] || f["company"] || null,
-    nric_last4: f["last 4 digit nric / uen"] || f["last 4 digit nric/uen"] || null,
-    contact: f["contact number"] || null,
-    email: f["email address"] || null,
-    event_type: f["event type"] || null,
-  };
-}
-
-// Maps the 3 accumulated groups into stageBookingForConfirm's normalized field
-// shape. venue/purpose/"cleaning with" aren't captured by any of the 3 real
-// templates — left blank, which stageBookingForConfirm already treats as
-// sensible defaults (Whole Venue, no notes, cleaning billed with deposit).
-function waAccumulationToFields(acc) {
-  const ed = acc.event_details || {};
-  const q = acc.quote || {};
-  const p = acc.particulars || {};
-  return {
-    name: p.name || "",
-    "nric/uen": p.nric_last4 || "",
-    "event type": ed.event_type || p.event_type || "",
-    venue: "",
-    "date of event": ed.date_of_event || "",
-    "time start": ed.start_time || "",
-    duration: ed.hours || "",
-    purpose: "",
-    rate: q.package_rate || "",
-    discount: q.discount_percent || "",
-    "cleaning with": "",
-    other: "",
-    contact: p.contact || "",
-    email: p.email || "",
-  };
-}
+// parseFlexibleDate/parseLooseNumber/detectWaTemplateType/parseWaEventDetails/
+// parseWaQuote/parseWaParticulars/waAccumulationToFields/WA_GROUP_LABELS now
+// live in ./parsing.js (extracted 2026-08-02, see its file header) so they can
+// be regression-tested directly under plain `node` — see test-parsing.js.
 
 async function telegramWaTemplateMessage(env, chatId, text, templateType) {
   const parsed = templateType === "event_details" ? parseWaEventDetails(text)
     : templateType === "quote" ? parseWaQuote(text)
     : parseWaParticulars(text);
+
+  // 2026-08-02 bug report: sending a fresh round of templates while an earlier
+  // booking was still sitting in pending_bookings awaiting Confirm/Cancel got no
+  // acknowledgment at all (root cause was the missing try/catch, fixed in
+  // telegramWebhook — but Kenneth also, separately, wants to actually SEE that
+  // an older pending booking exists rather than lose track of it). This is
+  // informational only — it does NOT block starting the new accumulation, both
+  // pending_bookings rows and pending_wa_accumulation coexist safely; existing
+  // ones are just easy to forget about otherwise.
+  let pendingBookingNote = "";
+  if (templateType === "event_details") {
+    const existing = await db.listPendingBookings(env, chatId);
+    if (existing.length) {
+      const names = existing.map((p) => p.data.client_name).join(", ");
+      pendingBookingNote = `\n\nℹ️ Note: you still have ${existing.length === 1 ? "a booking" : `${existing.length} bookings`} awaiting Confirm/Cancel (${names}) — this starts a separate, new one; the other${existing.length === 1 ? "" : "s"} will keep waiting.`;
+    }
+  }
 
   // A fresh Event-details message always starts a NEW accumulation — it's the
   // first of the three Kenneth sends for any booking, so a repeat is read as
@@ -756,7 +712,7 @@ async function telegramWaTemplateMessage(env, chatId, text, templateType) {
 
   if (missing.length) {
     await sendTelegram(env, chatId,
-      `📋 Got the ${WA_GROUP_LABELS[templateType]} template. Still need: ${missing.map((g) => WA_GROUP_LABELS[g]).join(", ")}.`);
+      `📋 Got the ${WA_GROUP_LABELS[templateType]} template. Still need: ${missing.map((g) => WA_GROUP_LABELS[g]).join(", ")}.${pendingBookingNote}`);
     return json({ ok: true });
   }
 
@@ -1314,17 +1270,8 @@ async function telegramCallback(env, cq) {
   return json({ ok: true });
 }
 
-// Label class includes ".()" (not just letters/spaces/slash) so real WhatsApp-
-// template labels like "No. Of Hours:" and "Name of Host (as in NRIC)/ Company:"
-// parse correctly, not just the strict template's simpler labels (Addendum 7).
-function parseTelegramTemplate(text) {
-  const fields = {};
-  for (const line of text.split(/\r?\n/)) {
-    const m = line.match(/^\s*([A-Za-z][A-Za-z /.()]*?)\s*:\s*(.*)$/);
-    if (m) fields[m[1].trim().toLowerCase()] = m[2].trim();
-  }
-  return fields;
-}
+// parseTelegramTemplate now lives in ./parsing.js (extracted 2026-08-02) — see
+// that file's header comment.
 function titleCase(s) {
   const t = String(s || "").trim().toLowerCase();
   return t ? t.charAt(0).toUpperCase() + t.slice(1) : t;
