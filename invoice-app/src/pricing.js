@@ -63,14 +63,74 @@ export const CORPORATE_CLEANING_FEE = 50;
 
 export const PET_CLEANING_FEE = 100; // optional, added on top when the pet checkbox is set
 
+// Singapore public holidays — sourced from MOM's official page
+// (mom.gov.sg/employment-practices/public-holidays), fetched 2026-08-02, plus
+// a same-day cross-check against independent aggregators. Covers 2026-2027
+// only; MUST be extended once MOM gazettes 2028 (typically published mid the
+// preceding year) — until then, a date beyond 2027 silently falls back to the
+// plain Fri/Sat/Sun check below, not a crash, but the rate card's "& PH"
+// promise quietly stops being honored for anything that far out.
+//
+// Deliberately does NOT include "holiday-in-lieu" Mondays (e.g. 1 Jun 2026,
+// when Vesak Day falls on a Sunday) — in-lieu is an employment-law concept
+// about a worker's own rest day, not what "Public Holiday" means on the
+// venue's own consumer-facing rate card, which never mentions "in lieu."
+// Scoped judgment call, not a certainty — flagged to Kenneth directly.
+//
+// Hari Raya Puasa/Haji are confirmed by moon-sighting and can shift by a day
+// once officially finalized closer to the date — the 2027 pair (10 Mar, 17
+// May) is still provisional as of this writing (2026-08-02); re-check MOM
+// nearer the time if a booking lands right on one of those two dates.
+const SG_PUBLIC_HOLIDAYS = new Set([
+  // 2026 (final)
+  "2026-01-01", // New Year's Day
+  "2026-02-17", "2026-02-18", // Chinese New Year
+  "2026-03-21", // Hari Raya Puasa
+  "2026-04-03", // Good Friday
+  "2026-05-01", // Labour Day
+  "2026-05-27", // Hari Raya Haji
+  "2026-05-31", // Vesak Day
+  "2026-08-09", // National Day
+  "2026-11-08", // Deepavali
+  "2026-12-25", // Christmas Day
+  // 2027 (Hari Raya dates provisional)
+  "2027-01-01", // New Year's Day
+  "2027-02-06", "2027-02-07", // Chinese New Year
+  "2027-03-10", // Hari Raya Puasa (provisional)
+  "2027-03-26", // Good Friday
+  "2027-05-01", // Labour Day
+  "2027-05-17", // Hari Raya Haji (provisional)
+  "2027-05-20", // Vesak Day
+  "2027-08-09", // National Day
+  "2027-10-28", // Deepavali
+  "2027-12-25", // Christmas Day
+]);
+
+// Adds `days` calendar days to a YYYY-MM-DD string, staying entirely in
+// "local" Date accessors (never mixing with .toISOString()/.getUTC*()) so the
+// arithmetic is correct regardless of which timezone the runtime treats as
+// local — Cloudflare Workers run in UTC, but a local `wrangler dev`/plain
+// `node` invocation may not, and mixing local-write with UTC-read would give
+// a different (wrong) answer in one environment but not the other.
+function addDaysLocal(dateStr, days) {
+  const d = new Date(dateStr + "T00:00:00");
+  d.setDate(d.getDate() + days);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 export function isWeekend(dateStr) {
-  // dateStr = YYYY-MM-DD. Treat as local date; Sat(6)/Sun(0) = weekend.
-  // NOTE: the live site's actual weekend boundary is "Fri-Sun & PH" for Social
-  // (i.e. Friday counts as weekend too) — this simple Sat/Sun check does NOT
-  // yet account for Friday or public holidays. Flagged as a known gap.
+  // Real boundary per the live rate card (confirmed 2026-08-02 directly
+  // against bojiovenue.com/#pricing — Social's tier heading literally says
+  // "🎉 Fri – Sun & PH ... Including Eve of PH & Public Holidays", and
+  // Corporate's tiers use the identical Fri-Sun split): Friday, Saturday,
+  // Sunday, a gazetted Public Holiday, or the day immediately before one.
+  // Previously only checked Sat/Sun — a real booking (Kenneth's own quote for
+  // 21 Aug 2026, a Friday) was computing the wrong $150 weekday "usual rate"
+  // instead of $180, confirming this gap was live, not just theoretical.
   const d = new Date(dateStr + "T00:00:00");
   const day = d.getDay();
-  return day === 0 || day === 6;
+  if (day === 5 || day === 6 || day === 0) return true; // Fri/Sat/Sun
+  return SG_PUBLIC_HOLIDAYS.has(dateStr) || SG_PUBLIC_HOLIDAYS.has(addDaysLocal(dateStr, 1));
 }
 
 function socialUsualRate(dateStr) {
