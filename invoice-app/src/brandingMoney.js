@@ -70,14 +70,19 @@ function newMoneyPage(doc) {
 }
 
 // ---------------------------------------------------------------------------
-// Header block — logo (cream box, top-left) + business info, doc title + number
-// (top-right) with a small "Balance Due" preview badge, then a left info column
-// (caller-supplied label/value pairs — e.g. Invoice Date/Event Date) and a right
-// "Bill To" column with the client's name + phone. One shared layout for all three
-// money-document types (INV/RRC/SD) rather than replicating each sample's own
-// slightly different arrangement — see file header comment.
+// Header block. Addendum 7 (2026-08-01): the two real Zoho layouts are genuinely
+// different, not just cosmetically — Kenneth confirmed exact replication of each
+// rather than the unified header this originally shipped with:
+//   'rental' (INV/RRC): title+doc-number top-LEFT; logo top-RIGHT with NO cream
+//     box, full address+phone+email beneath it; no Balance Due preview badge.
+//   'deposit' (SD): logo top-LEFT in a cream box, business name+phone+email only
+//     (no address) beneath; title+doc-number+Balance-Due-badge top-RIGHT.
+// Below either variant, the same two-column layout: a caller-supplied left info
+// column (e.g. Invoice Date/Event Date) and a right client-info column (label
+// text also caller-supplied — "Customer Details" for rental docs, "Bill To" for
+// the deposit doc, per the real samples).
 // ---------------------------------------------------------------------------
-export function drawMoneyHeader(ctx, env, { docTitle, docNumberLabel, docNumber, balanceDue, leftInfo, client }) {
+export function drawMoneyHeader(ctx, env, { layout, docTitle, docNumberLabel, docNumber, balanceDue, leftInfo, client }) {
   const { page, font, bold, logoImg } = ctx;
   const T = (s, x, y, o = {}) => page.drawText(String(s ?? ""), { x, y, size: o.size ?? 9.5, font: o.f ?? font, color: o.color ?? MONEY_TEXT });
   const R = (s, xRight, y, o = {}) => {
@@ -86,37 +91,60 @@ export function drawMoneyHeader(ctx, env, { docTitle, docNumberLabel, docNumber,
     page.drawText(String(s ?? ""), { x: xRight - w, y, size, font: f, color: o.color ?? MONEY_TEXT });
   };
 
-  let y = MA4[1] - BAND_H - 16;
+  const yStart = MA4[1] - BAND_H - 16;
+  let contentBottom;
 
-  // Logo, cream box top-left.
-  const boxW = 96, boxH = 56;
-  const boxX = MM, boxY = y - boxH + 10;
-  page.drawRectangle({ x: boxX, y: boxY, width: boxW, height: boxH, color: MONEY_CREAM });
-  if (logoImg) {
-    const dims = logoImg.scaleToFit(boxW - 14, boxH - 14);
-    page.drawImage(logoImg, { x: boxX + (boxW - dims.width) / 2, y: boxY + (boxH - dims.height) / 2, width: dims.width, height: dims.height });
+  if (layout === "deposit") {
+    // Logo, cream box, top-left.
+    const boxW = 96, boxH = 56;
+    const boxX = MM, boxY = yStart - boxH + 10;
+    page.drawRectangle({ x: boxX, y: boxY, width: boxW, height: boxH, color: MONEY_CREAM });
+    if (logoImg) {
+      const dims = logoImg.scaleToFit(boxW - 14, boxH - 14);
+      page.drawImage(logoImg, { x: boxX + (boxW - dims.width) / 2, y: boxY + (boxH - dims.height) / 2, width: dims.width, height: dims.height });
+    }
+    T(env.BUSINESS_NAME || "BojioVenue", boxX, boxY - 13, { size: 10, f: bold, color: MONEY_TITLE });
+    T(env.BUSINESS_PHONE || "", boxX, boxY - 25, { size: 8, color: MONEY_GREY });
+    T(env.BUSINESS_EMAIL || "", boxX, boxY - 35, { size: 8, color: MONEY_GREY });
+    const leftBottom = boxY - 35;
+
+    // Title + doc number + Balance Due badge, top-right.
+    R(docTitle, MA4[0] - MM, yStart - 8, { size: 22, f: bold, color: MONEY_TITLE });
+    R(`${docNumberLabel || "No."}# ${docNumber}`, MA4[0] - MM, yStart - 30, { size: 10.5, f: bold, color: MONEY_TEXT });
+    let rightBottom = yStart - 30;
+    if (balanceDue !== undefined && balanceDue !== null) {
+      const badgeW = 150, badgeH = 30, badgeX = MA4[0] - MM - badgeW, badgeY = yStart - 66;
+      page.drawSvgPath(roundedRectPath(badgeW, badgeH, 6), { x: badgeX, y: badgeY + badgeH, color: MONEY_BADGE_BG });
+      T("Balance Due", badgeX + 10, badgeY + 18, { size: 8, color: MONEY_GREY });
+      R(`SGD ${Number(balanceDue).toFixed(2)}`, badgeX + badgeW - 10, badgeY + 8, { size: 11, f: bold, color: MONEY_TITLE });
+      rightBottom = badgeY;
+    }
+    contentBottom = Math.min(leftBottom, rightBottom);
+  } else {
+    // Title + doc number, top-left. No Balance Due preview badge on this layout
+    // (not present on the real RRC sample).
+    T(docTitle, MM, yStart - 8, { size: 22, f: bold, color: MONEY_TITLE });
+    T(`${docNumberLabel || "No."}# ${docNumber}`, MM, yStart - 30, { size: 10.5, f: bold, color: MONEY_TEXT });
+    const leftBottom = yStart - 30;
+
+    // Logo (no cream box) + full address block, top-right.
+    let logoBottom = yStart - 8;
+    if (logoImg) {
+      const dims = logoImg.scaleToFit(84, 34);
+      page.drawImage(logoImg, { x: MA4[0] - MM - dims.width, y: yStart - dims.height, width: dims.width, height: dims.height });
+      logoBottom = yStart - dims.height;
+    }
+    let ay = logoBottom - 12;
+    for (const line of [env.BUSINESS_ADDRESS_LINE1, env.BUSINESS_ADDRESS_LINE2, env.BUSINESS_ADDRESS_LINE3, env.BUSINESS_PHONE, env.BUSINESS_EMAIL]) {
+      R(line || "", MA4[0] - MM, ay, { size: 8, color: MONEY_GREY });
+      ay -= 10;
+    }
+    contentBottom = Math.min(leftBottom, ay);
   }
-  T(env.BUSINESS_NAME || "BojioVenue", boxX, boxY - 13, { size: 10, f: bold, color: MONEY_TITLE });
-  T(env.BUSINESS_ADDRESS_LINE1 || "", boxX, boxY - 25, { size: 8, color: MONEY_GREY });
-  T(env.BUSINESS_ADDRESS_LINE2 || "", boxX, boxY - 35, { size: 8, color: MONEY_GREY });
-  T(`${env.BUSINESS_ADDRESS_LINE3 || ""}`, boxX, boxY - 45, { size: 8, color: MONEY_GREY });
-  T(`${env.BUSINESS_PHONE || ""}  ·  ${env.BUSINESS_EMAIL || ""}`, boxX, boxY - 57, { size: 8, color: MONEY_GREY });
 
-  // Title + doc number, top-right.
-  R(docTitle, MA4[0] - MM, y - 8, { size: 22, f: bold, color: MONEY_TITLE });
-  R(`${docNumberLabel || "No."}# ${docNumber}`, MA4[0] - MM, y - 30, { size: 10.5, f: bold, color: MONEY_TEXT });
+  let y = contentBottom - 26;
 
-  // Balance Due preview badge.
-  if (balanceDue !== undefined && balanceDue !== null) {
-    const badgeW = 150, badgeH = 30, badgeX = MA4[0] - MM - badgeW, badgeY = y - 66;
-    page.drawSvgPath(roundedRectPath(badgeW, badgeH, 6), { x: badgeX, y: badgeY + badgeH, color: MONEY_BADGE_BG });
-    T("Balance Due", badgeX + 10, badgeY + 18, { size: 8, color: MONEY_GREY });
-    R(`SGD ${Number(balanceDue).toFixed(2)}`, badgeX + badgeW - 10, badgeY + 8, { size: 11, f: bold, color: MONEY_TITLE });
-  }
-
-  y = boxY - 72;
-
-  // Left info column (caller-supplied) + right "Bill To" column.
+  // Left info column (caller-supplied) + right client-info column.
   const colR = MA4[0] / 2 + 20;
   let ly = y, ry = y;
   for (const { label, value } of leftInfo) {

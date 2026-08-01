@@ -3,6 +3,17 @@
 // Written so a second channel (e.g. email via Resend) can be dropped in without
 // touching callers.
 
+// Addendum 7 (2026-08-01) — WhatsApp delivery via wa.me deep links, NOT the
+// WhatsApp Business API (explicit non-goal, ToS/ban risk on the business number).
+// Kenneth taps a Telegram button that opens WhatsApp pre-composed with his own
+// wording (see worker.js's message_templates-backed buildWaMessage) + relevant
+// links; he reviews and sends himself. wa.me requires digits-only (country code,
+// no "+"/spaces/dashes) — client phone is stored human-formatted ("+65-91234567").
+export function waLink(phone, text) {
+  const digits = String(phone || "").replace(/\D/g, "");
+  return `https://wa.me/${digits}?text=${encodeURIComponent(text)}`;
+}
+
 // filed: { agreement, rentalInvoice, securityDeposit } — each either a Drive
 // files.create response ({id, name, webViewLink}) or null if that document
 // failed to file. Includes the actual clickable Drive link per document, per

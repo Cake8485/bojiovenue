@@ -349,3 +349,87 @@ export async function getPendingBooking(env, id) {
 export async function deletePendingBooking(env, id) {
   await env.DB.prepare(`DELETE FROM pending_bookings WHERE id = ?`).bind(id).run();
 }
+
+// ---------------------------------------------------------------------------
+// Addendum 7 — WhatsApp-quote-template accumulation (see schema.sql). One row
+// per chat_id; each of the 3 field groups is NULL until that message type has
+// arrived, parsed as JSON once it has.
+// ---------------------------------------------------------------------------
+export async function getPendingWaAccumulation(env, chatId) {
+  const row = await env.DB.prepare(`SELECT * FROM pending_wa_accumulation WHERE chat_id = ?`).bind(String(chatId)).first();
+  if (!row) return null;
+  return {
+    ...row,
+    event_details: row.event_details ? JSON.parse(row.event_details) : null,
+    quote: row.quote ? JSON.parse(row.quote) : null,
+    particulars: row.particulars ? JSON.parse(row.particulars) : null,
+  };
+}
+
+// Merges `fields` into whichever single group (`"event_details" | "quote" |
+// "particulars"`) just arrived — the other two groups are left untouched via
+// COALESCE against the existing row (or NULL, on first insert for this chat).
+export async function setPendingWaGroup(env, chatId, group, fields) {
+  const col = { event_details: "event_details", quote: "quote", particulars: "particulars" }[group];
+  if (!col) throw new Error("Unknown WA accumulation group: " + group);
+  await env.DB.prepare(
+    `INSERT INTO pending_wa_accumulation (chat_id, ${col}, updated_at) VALUES (?, ?, datetime('now'))
+     ON CONFLICT(chat_id) DO UPDATE SET ${col} = excluded.${col}, updated_at = datetime('now')`
+  ).bind(String(chatId), JSON.stringify(fields)).run();
+}
+
+// Starts a fresh accumulation for this chat, discarding anything in flight — used
+// when a NEW Event-details message arrives (the natural "start of a new booking"
+// signal, since it's always the first of the three Kenneth sends).
+export async function resetPendingWaAccumulation(env, chatId, group, fields) {
+  const col = { event_details: "event_details", quote: "quote", particulars: "particulars" }[group];
+  if (!col) throw new Error("Unknown WA accumulation group: " + group);
+  await env.DB.prepare(
+    `INSERT INTO pending_wa_accumulation (chat_id, ${col}, updated_at) VALUES (?, ?, datetime('now'))
+     ON CONFLICT(chat_id) DO UPDATE SET event_details = NULL, quote = NULL, particulars = NULL, ${col} = excluded.${col}, updated_at = datetime('now')`
+  ).bind(String(chatId), JSON.stringify(fields)).run();
+}
+
+export async function clearPendingWaAccumulation(env, chatId) {
+  await env.DB.prepare(`DELETE FROM pending_wa_accumulation WHERE chat_id = ?`).bind(String(chatId)).run();
+}
+
+// ---------------------------------------------------------------------------
+// Addendum 7 — pending payment-match actions (see schema.sql). Same small-
+// integer-id round-trip pattern as pending_bookings.
+// ---------------------------------------------------------------------------
+export async function createPendingPaymentAction(env, chatId, invoiceId, { amount, matched_kind, payment_mode, bank, reference }) {
+  const { meta } = await env.DB.prepare(
+    `INSERT INTO pending_payment_actions (chat_id, invoice_id, amount, matched_kind, payment_mode, bank, reference)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).bind(String(chatId), invoiceId, amount, matched_kind, payment_mode || null, bank || null, reference || null).run();
+  return meta.last_row_id;
+}
+
+export function getPendingPaymentAction(env, id) {
+  return env.DB.prepare(`SELECT * FROM pending_payment_actions WHERE id = ?`).bind(id).first();
+}
+
+export async function deletePendingPaymentAction(env, id) {
+  await env.DB.prepare(`DELETE FROM pending_payment_actions WHERE id = ?`).bind(id).run();
+}
+
+// ---------------------------------------------------------------------------
+// Addendum 7 — editable WhatsApp message templates.
+// ---------------------------------------------------------------------------
+export async function getMessageTemplate(env, key) {
+  const row = await env.DB.prepare(`SELECT body FROM message_templates WHERE key = ?`).bind(key).first();
+  return row ? row.body : null;
+}
+
+export async function setMessageTemplate(env, key, body) {
+  await env.DB.prepare(
+    `INSERT INTO message_templates (key, body, updated_at) VALUES (?, ?, datetime('now'))
+     ON CONFLICT(key) DO UPDATE SET body = excluded.body, updated_at = datetime('now')`
+  ).bind(key, body).run();
+}
+
+export async function listMessageTemplates(env) {
+  const { results } = await env.DB.prepare(`SELECT key, body FROM message_templates ORDER BY key`).all();
+  return results;
+}

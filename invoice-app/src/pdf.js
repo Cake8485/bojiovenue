@@ -149,6 +149,7 @@ export async function buildRentalMoneyDoc(env, inv, payments, { title, docNumber
   const balanceDue = Math.max(0, round2(subTotal - paymentMade));
 
   let y = drawMoneyHeader(ctx, env, {
+    layout: "rental",
     docTitle: title,
     docNumberLabel,
     docNumber: inv.booking_no,
@@ -165,7 +166,7 @@ export async function buildRentalMoneyDoc(env, inv, payments, { title, docNumber
             { label: "Event Date :", value: inv.booking_date },
             { label: "Event Type :", value: inv.event_type },
           ],
-    client: { header: "Bill To", name: inv.client_name, phone: inv.client_phone },
+    client: { header: "Customer Details", name: inv.client_name, phone: inv.client_phone },
   });
 
   y = drawLineItemsTable(ctx, y, { columns: RENTAL_COLUMNS, rows: rows.map((r) => ({ cells: r.cells, sublines: r.sublines, bold: r.bold })) });
@@ -216,6 +217,7 @@ export async function buildSecurityDepositPdf(env, inv, payments = []) {
   const balanceDue = Math.max(0, round2(subTotal - paymentMade));
 
   let y = drawMoneyHeader(ctx, env, {
+    layout: "deposit",
     docTitle: "Deposit Invoice",
     docNumberLabel: "Retainer",
     docNumber: inv.booking_no,

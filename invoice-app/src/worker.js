@@ -38,7 +38,7 @@ import { buildRentalReceiptPdf } from "./receipts.js";
 import { buildDeductionAddendumPdf, deductionHtml } from "./deductions.js";
 import { payNowQrSvg, invoicePayNowPayload } from "./paynow.js";
 import { fileToDrive, ensureBookingFolder, ensureSubfolder, moveFolder, renameFolder, getAccessToken } from "./drive.js";
-import { notifySigned, sendTelegram, answerCallbackQuery, sendTelegramDocument, getTelegramPhotoBytes } from "./notify.js";
+import { notifySigned, sendTelegram, answerCallbackQuery, sendTelegramDocument, getTelegramPhotoBytes, waLink } from "./notify.js";
 import { adminPage, signPage, addendumPage } from "./pages.js";
 
 const json = (data, status = 200) =>
@@ -239,6 +239,16 @@ async function submitSignature(env, ctx, token, request) {
 
   const filed = await fileAllDocuments(env, signed, payments);
   ctx.waitUntil(notifySigned(env, signed, filed.ok));
+  // Addendum 7 — a WhatsApp button for the payment-reminder template, offered as
+  // soon as there's something to remind the client ABOUT (i.e. once they've
+  // actually signed) — separate from notifySigned's informational summary above.
+  ctx.waitUntil((async () => {
+    const payWaBtn = waButton("📱 Remind to pay (WhatsApp)", signed.client_phone,
+      await buildWaMessage(env, "after_sign_payment", [`${env.PUBLIC_BASE_URL}/sign/${signed.token}`]));
+    if (payWaBtn && env.TELEGRAM_CHAT_ID) {
+      await sendTelegram(env, env.TELEGRAM_CHAT_ID, `${signed.booking_no}: signed — ready to remind ${signed.client_name} about payment.`, [[payWaBtn]]);
+    }
+  })());
 
   return json({ ok: true, booking_no: signed.booking_no, filed: filed.ok, fileError: filed.error });
 }
@@ -426,7 +436,9 @@ const TELEGRAM_TEMPLATE_HELP =
   `"2026036 deduct 150 reason: stained sofa" to issue a Security Deposit Deduction ` +
   `Addendum first — you'll get an acknowledgment link to send the client yourself.\n\n` +
   `"2026036 postpone to 2026-09-20" moves the booking date (and its Drive folder, ` +
-  `if the month changed) — the price stays as originally agreed.`;
+  `if the month changed) — the price stays as originally agreed.\n\n` +
+  `"set template agreement_send: <wording>" edits a WhatsApp message template ` +
+  `(agreement_send, after_sign_payment, or booking_confirmed) — no code change needed.`;
 
 // Addendum 6: a booking is addressed by its bare 7-digit booking number
 // ("2026036"), optionally prefixed by ANY of its document letters (AGR-/INV-/
@@ -436,6 +448,12 @@ const TELEGRAM_TEMPLATE_HELP =
 // validated against a fixed list. Capture group 1 is always just the 7 digits.
 const BOOKING_REF_RE = /(?:[A-Za-z]+-)?(\d{7})(?:-\d+)?/;
 const BOOKING_REF_LINE_RE = new RegExp(`^\\s*${BOOKING_REF_RE.source}\\s+([\\s\\S]+)$`);
+
+// Addendum 7 — "set template agreement_send: <new wording>" edits a WhatsApp
+// message template without a code change or redeploy (Kenneth's explicit ask).
+// Checked before the booking-ref/new-booking routing since it addresses no
+// specific booking.
+const SET_TEMPLATE_RE = /^set template\s+(agreement_send|after_sign_payment|booking_confirmed)\s*:\s*([\s\S]+)$/i;
 
 async function telegramWebhook(env, ctx, request) {
   const update = await request.json().catch(() => ({}));
@@ -458,10 +476,32 @@ async function telegramWebhook(env, ctx, request) {
 
   if (!msg.text) return json({ ok: true }); // ignore stickers, voice notes, etc.
 
+  const templateMatch = msg.text.trim().match(SET_TEMPLATE_RE);
+  if (templateMatch) return telegramSetTemplate(env, chatId, templateMatch[1].toLowerCase(), templateMatch[2].trim());
+
   const statusMatch = msg.text.match(BOOKING_REF_LINE_RE);
   if (statusMatch) return telegramStatusUpdate(env, chatId, statusMatch[1], statusMatch[2]);
 
+  // Addendum 7 — a COMPLETE strict-template message (§5a, kept as a fallback per
+  // Kenneth's instruction — "it's already built") always wins even though it
+  // shares a label ("Date of Event:") with the WA event-details template (§5b):
+  // checked first, since a lone WA event-details message never also carries
+  // "Name:" — only a genuinely complete §5a message has both in one shot.
+  const strictFields = parseTelegramTemplate(msg.text);
+  if (!(strictFields.name && strictFields["date of event"])) {
+    // Not a complete strict template — WhatsApp-forwarded quote templates are
+    // the PRIMARY booking-intake path now (§5b), tried next.
+    const waTemplateType = detectWaTemplateType(msg.text);
+    if (waTemplateType) return telegramWaTemplateMessage(env, chatId, msg.text, waTemplateType);
+  }
+
   return telegramNewBooking(env, chatId, msg.text);
+}
+
+async function telegramSetTemplate(env, chatId, key, body) {
+  await db.setMessageTemplate(env, key, body);
+  await sendTelegram(env, chatId, `✅ Template "${key}" updated:\n\n${body}`);
+  return json({ ok: true });
 }
 
 // Downloads the largest available resolution of an inbound photo and files it to
@@ -506,7 +546,17 @@ async function telegramNewBooking(env, chatId, text) {
     await sendTelegram(env, chatId, TELEGRAM_TEMPLATE_HELP);
     return json({ ok: true });
   }
+  return stageBookingForConfirm(env, chatId, fields);
+}
 
+// Shared by both booking-intake paths (§5a's strict single-message template and
+// §5b's WhatsApp-forward accumulation, see telegramWaTemplateComplete) — `fields`
+// is always the SAME normalized shape (lowercase keys matching
+// parseTelegramTemplate's convention: name, "event type", venue, "date of event",
+// "time start", duration, purpose, rate, discount, "cleaning with", "nric/uen",
+// other) regardless of which path produced it, so the compute/stage/reply logic
+// exists in exactly one place.
+async function stageBookingForConfirm(env, chatId, fields) {
   try {
     const event_type = titleCase(fields["event type"] || "Social");
     const venue_space = fields["venue"] && /main hall/i.test(fields["venue"]) ? "Main Hall Only" : "Whole Venue";
@@ -516,9 +566,9 @@ async function telegramNewBooking(env, chatId, text) {
       return json({ ok: true });
     }
 
-    const booking_date = fields["date of event"];
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(booking_date)) {
-      await sendTelegram(env, chatId, `⚠️ Date "${booking_date}" must be in YYYY-MM-DD format, e.g. 2026-08-15.`);
+    const booking_date = parseFlexibleDate(fields["date of event"]);
+    if (!booking_date) {
+      await sendTelegram(env, chatId, `⚠️ Couldn't read the event date "${fields["date of event"] || ""}" — try YYYY-MM-DD (e.g. 2026-08-15) or DD Mon YYYY (e.g. 15 Aug 2026).`);
       return json({ ok: true });
     }
 
@@ -547,7 +597,7 @@ async function telegramNewBooking(env, chatId, text) {
     }
 
     const pendingData = {
-      client_name: fields.name, client_phone: null, client_email: null, client_nric_uen,
+      client_name: fields.name, client_phone: fields["contact"] || null, client_email: fields["email"] || null, client_nric_uen,
       event_type, venue_space, booking_date, start_time, end_time,
       hours: q.hours, usual_rate: q.usual_rate, hourly_rate: q.hourly_rate, rental_subtotal: q.rental_subtotal,
       discount_percent: q.discount_percent, cleaning_fee: q.cleaning_fee, cleaning_fee_with,
@@ -583,6 +633,135 @@ async function telegramNewBooking(env, chatId, text) {
   }
 
   return json({ ok: true });
+}
+
+// Accepts YYYY-MM-DD (§5a's strict format) or "D Mon YYYY" / "DD Mon YYYY" (more
+// likely from a real WhatsApp forward, per §5b) — returns YYYY-MM-DD or null if
+// neither matches. Deliberately narrow: an ambiguous format (e.g. 08/09, which
+// could be Aug 9 or Sep 8) is left unparsed rather than guessed at, same
+// reasoning as the rest of this file's discount/date handling.
+const MONTH_NAMES = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+function parseFlexibleDate(raw) {
+  const s = String(raw || "").trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const m = s.match(/^(\d{1,2})\s+([A-Za-z]{3,})\s+(\d{4})$/);
+  if (m) {
+    const month = MONTH_NAMES.indexOf(m[2].slice(0, 3).toLowerCase());
+    if (month >= 0) return `${m[3]}-${String(month + 1).padStart(2, "0")}-${String(m[1]).padStart(2, "0")}`;
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Addendum 7 (2026-08-01) — WhatsApp-quote-template accumulation, §5b. Kenneth
+// forwards his existing WhatsApp templates verbatim as up to 3 separate
+// messages; this detects which of the 3 a given message is and merges it into
+// a per-chat accumulation (pending_wa_accumulation) until all 3 have arrived.
+//
+// ⚠ PROVISIONAL: the label text/regexes below are my best-effort match against
+// the ABSTRACTED label list in SPEC.md §5b, not yet verified against a real
+// forwarded message (still waiting on that from Kenneth — see SPEC.md's open
+// item). Expect to refine once real examples arrive; until then a field that
+// doesn't confidently parse is reported back as missing rather than guessed at.
+// ---------------------------------------------------------------------------
+const WA_GROUP_LABELS = { event_details: "Event details", quote: "Quote", particulars: "Particulars" };
+
+function detectWaTemplateType(text) {
+  if (/date\s*of\s*event/i.test(text)) return "event_details";
+  if (/usual\s*rate/i.test(text) || /final\s*price/i.test(text)) return "quote";
+  if (/name\s*of\s*host/i.test(text) || /last\s*4\s*digit/i.test(text)) return "particulars";
+  return null;
+}
+
+function parseWaEventDetails(text) {
+  const f = parseTelegramTemplate(text);
+  return {
+    date_of_event: f["date of event"] || null,
+    hours: f["no. of hours"] || f["no of hours"] || null,
+    start_time: f["start time of event"] || null,
+    event_type: f["type of event"] || null,
+  };
+}
+
+function parseWaQuote(text) {
+  const f = parseTelegramTemplate(text);
+  const packageMatch = text.match(/package\s+(\d+(?:\.\d+)?)\s*hours?\s*:\s*\$?\s*(\d+(?:\.\d+)?)\s*\/\s*hr/i);
+  const discountMatch = text.match(/discount\s+(\d+(?:\.\d+)?)\s*%/i);
+  return {
+    usual_rate: f["usual rate"] || null,
+    package_hours: packageMatch ? packageMatch[1] : null,
+    package_rate: packageMatch ? packageMatch[2] : null,
+    total: f["total"] || null,
+    discount_percent: discountMatch ? discountMatch[1] : null,
+    final_price: f["final price"] || null,
+    cleaning_fee: f["cleaning fee"] || null,
+    deposit_amount: f["deposit"] || f["security deposit"] || null,
+  };
+}
+
+function parseWaParticulars(text) {
+  const f = parseTelegramTemplate(text);
+  return {
+    name: f["name of host (as in nric)/ company"] || f["name of host"] || f["company"] || null,
+    nric_last4: f["last 4 digit nric / uen"] || f["last 4 digit nric/uen"] || null,
+    contact: f["contact number"] || null,
+    email: f["email address"] || null,
+    event_type: f["event type"] || null,
+  };
+}
+
+// Maps the 3 accumulated groups into stageBookingForConfirm's normalized field
+// shape. venue/purpose/"cleaning with" aren't captured by any of the 3 real
+// templates — left blank, which stageBookingForConfirm already treats as
+// sensible defaults (Whole Venue, no notes, cleaning billed with deposit).
+function waAccumulationToFields(acc) {
+  const ed = acc.event_details || {};
+  const q = acc.quote || {};
+  const p = acc.particulars || {};
+  return {
+    name: p.name || "",
+    "nric/uen": p.nric_last4 || "",
+    "event type": ed.event_type || p.event_type || "",
+    venue: "",
+    "date of event": ed.date_of_event || "",
+    "time start": ed.start_time || "",
+    duration: ed.hours || "",
+    purpose: "",
+    rate: q.package_rate || "",
+    discount: q.discount_percent || "",
+    "cleaning with": "",
+    other: "",
+    contact: p.contact || "",
+    email: p.email || "",
+  };
+}
+
+async function telegramWaTemplateMessage(env, chatId, text, templateType) {
+  const parsed = templateType === "event_details" ? parseWaEventDetails(text)
+    : templateType === "quote" ? parseWaQuote(text)
+    : parseWaParticulars(text);
+
+  // A fresh Event-details message always starts a NEW accumulation — it's the
+  // first of the three Kenneth sends for any booking, so a repeat is read as
+  // "starting a new booking" rather than merged into a possibly-stale one.
+  if (templateType === "event_details") {
+    await db.resetPendingWaAccumulation(env, chatId, templateType, parsed);
+  } else {
+    await db.setPendingWaGroup(env, chatId, templateType, parsed);
+  }
+
+  const acc = await db.getPendingWaAccumulation(env, chatId);
+  const groups = ["event_details", "quote", "particulars"];
+  const missing = groups.filter((g) => !acc[g]);
+
+  if (missing.length) {
+    await sendTelegram(env, chatId,
+      `📋 Got the ${WA_GROUP_LABELS[templateType]} template. Still need: ${missing.map((g) => WA_GROUP_LABELS[g]).join(", ")}.`);
+    return json({ ok: true });
+  }
+
+  await db.clearPendingWaAccumulation(env, chatId);
+  return stageBookingForConfirm(env, chatId, waAccumulationToFields(acc));
 }
 
 // Recognized status phrases after a booking reference. Checked in order — first
@@ -715,85 +894,36 @@ function computeStage(inv, deductions) {
     : "Acknowledged (balance payout due)";
 }
 
-async function telegramStatusUpdate(env, chatId, bookingNo, rawStatusText) {
-  const inv = await db.getInvoiceByBookingNo(env, bookingNo);
-  if (!inv) {
-    await sendTelegram(env, chatId, `⚠️ ${bookingNo} not found.`);
-    return json({ ok: true });
-  }
-
-  // Strip any trailing payment details ("paynow ocbc ref 5358482") up front — every
-  // check below operates on `statusText` (the remainder), so a payment-mode/bank/
-  // reference suffix never has to be anticipated by DEDUCT_RE/POSTPONE_RE/
-  // STATUS_PHRASES individually.
-  const { remaining: statusText, mode, bank, reference } = extractPaymentDetails(rawStatusText.trim());
-
-  if (/^(stage|status)$/i.test(statusText)) {
-    const deductions = await db.listDeductionsForInvoice(env, inv.id);
-    await sendTelegram(env, chatId, `📍 ${bookingNo} (${inv.client_name}): ${computeStage(inv, deductions)}`);
-    return json({ ok: true });
-  }
-
-  const deductMatch = statusText.match(DEDUCT_RE);
-  if (deductMatch) return telegramDeductCommand(env, chatId, inv, Number(deductMatch[1]), deductMatch[2].trim());
-
-  const postponeMatch = statusText.match(POSTPONE_RE);
-  if (postponeMatch) return telegramPostponeCommand(env, chatId, inv, postponeMatch[1]);
-
-  const match = STATUS_PHRASES.find((p) => p.re.test(statusText));
-  if (!match) {
-    await sendTelegram(env, chatId,
-      `⚠️ Didn't recognize "${statusText}" for ${bookingNo}. Try: "rental paid", "deposit paid", "cleaning paid", "deposit refunded", "partially paid", ` +
-      `"deduct 150 reason: ...", "postpone to YYYY-MM-DD", or "stage".`);
-    return json({ ok: true });
-  }
-  // Resolved against THIS booking's cleaning_fee_with — see STATUS_PHRASES' comment
-  // and resolveApply: "rental paid"/"deposit paid" only bundle cleaning_fee_status
-  // when the cleaning fee is actually allocated to that side.
-  const applied = resolveApply(match, inv);
-
-  // Auto-log a matching payments-table entry the FIRST time each field actually
-  // flips to paid/held — otherwise "Total received"/"Balance outstanding" (and the
-  // PayNow QR's show-if-balance>0 check) never learn that a Telegram-marked payment
-  // came in, since those are computed from the payments log, not the status fields
-  // directly. Compares before/after per field so bundled ("deposit paid" also flips
-  // cleaning_fee_status) and standalone ("cleaning paid" alone) cases both log
-  // correctly without double-counting on a repeated command. Any payment mode/bank/
-  // reference Kenneth typed is attached here too — see extractPaymentDetails.
+// Shared tail for every path that changes payment/deposit status: applies the
+// status fields, refiles whichever money document(s) are affected, generates the
+// rental receipt if this transition includes rental first becoming Paid, and
+// notifies Kenneth. Used by both the phrase-matched STATUS_PHRASES path below and
+// the amount-matching confirm-payment flow (Addendum 7, see telegramConfirmPay)
+// so the actual apply/refile/notify logic exists in exactly one place.
+// `paymentLogs`: pre-computed [{amount, kind, note}] rows to insert (mode/bank/
+// reference merged in from `paymentMeta`) — computed by the caller since the
+// refund case's amount depends on prior deductions, which varies by call site.
+async function applyStatusChangeAndNotify(env, chatId, inv, applied, { paymentLogs, generateReceipt, label, paymentMeta, extraNote }) {
   const today = new Date().toISOString().slice(0, 10);
-  const paymentMeta = { payment_mode: mode, bank, reference };
-  if (applied.payment_status === "Paid" && inv.payment_status !== "Paid") {
-    const total = inv.event_type === "Social"
-      ? round2(Number(inv.rental_total) + Number(inv.pet_fee || 0))
-      : round2(Number(inv.rental_total) + Number(inv.pet_fee || 0) - Number(inv.discount || 0));
-    await db.addPayment(env, inv.id, { amount: total, kind: "balance", paid_on: today, note: "Auto-logged (Telegram: rental paid)", ...paymentMeta });
+  for (const log of paymentLogs || []) {
+    await db.addPayment(env, inv.id, { amount: log.amount, kind: log.kind, paid_on: today, note: log.note, ...paymentMeta });
   }
-  if (applied.deposit_status === "Held" && inv.deposit_status !== "Held") {
-    await db.addPayment(env, inv.id, { amount: Number(inv.deposit_amount || 0), kind: "deposit", paid_on: today, note: "Auto-logged (Telegram: deposit paid)", ...paymentMeta });
+  if (applied.deposit_status === "Held") {
     // SD's own "Deposit Date" field reads this — previously set inside the generic
     // receipt-timestamp helper, which Addendum 6 narrowed to rental-only (SD has no
-    // receipt of its own), so this needs its own explicit call now.
+    // receipt of its own), so this needs its own explicit call.
     await db.markTimestampOnce(env, inv.id, "deposit_paid_at");
   }
-  if (applied.cleaning_fee_status === "Paid" && inv.cleaning_fee_status !== "Paid") {
-    await db.addPayment(env, inv.id, { amount: Number(inv.cleaning_fee || 0), kind: "cleaning_fee", paid_on: today, note: "Auto-logged (Telegram: cleaning fee paid)", ...paymentMeta });
-  }
-  // Refund (Addendum 4): amount is the deposit MINUS any deductions filed on this
-  // booking, so this correctly logs the full deposit for a plain refund or just the
-  // remaining balance after a deduction, without the caller needing to know which.
   let pendingDeductionWarning = "";
-  if (applied.deposit_status === "Refunded" && inv.deposit_status !== "Refunded") {
-    const deductions = await db.listDeductionsForInvoice(env, inv.id);
-    const deductedTotal = deductions.reduce((s, d) => s + Number(d.amount || 0), 0);
-    const refundAmount = Math.max(0, Number(inv.deposit_amount || 0) - deductedTotal);
-    await db.addPayment(env, inv.id, { amount: refundAmount, kind: "refund", paid_on: today, note: "Auto-logged (Telegram: refunded)", ...paymentMeta });
+  if (applied.deposit_status === "Refunded") {
     await db.markTimestampOnce(env, inv.id, "deposit_refunded_at");
+    const deductions = await db.listDeductionsForInvoice(env, inv.id);
     const pending = deductions.find((d) => d.status === "pending");
     if (pending) pendingDeductionWarning = `\n⚠️ Note: this booking has a deduction awaiting client acknowledgment (${env.PUBLIC_BASE_URL}/addendum/${pending.token}) — double check the client agreed before paying out.`;
   }
 
   await db.setStatus(env, inv.id, applied);
-  const updated = await db.getInvoiceByBookingNo(env, bookingNo);
+  const updated = await db.getInvoiceByBookingNo(env, inv.booking_no);
 
   let refileNote = "";
   if (updated.status === "signed") {
@@ -821,9 +951,85 @@ async function telegramStatusUpdate(env, chatId, bookingNo, rawStatusText) {
       }
     }
 
-    if (match.receipt) refileNote += await generateAndSendReceipt(env, chatId, updated);
+    if (generateReceipt) refileNote += await generateAndSendReceipt(env, chatId, updated);
   } else {
     refileNote = "\n(Not yet signed — nothing to refile yet; status will show once it is.)";
+  }
+
+  await sendTelegram(env, chatId, `✅ ${inv.booking_no}: ${label}.${refileNote}${pendingDeductionWarning}${extraNote || ""}`);
+}
+
+async function telegramStatusUpdate(env, chatId, bookingNo, rawStatusText) {
+  const inv = await db.getInvoiceByBookingNo(env, bookingNo);
+  if (!inv) {
+    await sendTelegram(env, chatId, `⚠️ ${bookingNo} not found.`);
+    return json({ ok: true });
+  }
+
+  // Strip any trailing payment details ("paynow ocbc ref 5358482") up front — every
+  // check below operates on `statusText` (the remainder), so a payment-mode/bank/
+  // reference suffix never has to be anticipated by DEDUCT_RE/POSTPONE_RE/
+  // STATUS_PHRASES/AMOUNT_PAID_RE individually.
+  const { remaining: statusText, mode, bank, reference } = extractPaymentDetails(rawStatusText.trim());
+  const paymentMeta = { payment_mode: mode, bank, reference };
+
+  if (/^(stage|status)$/i.test(statusText)) {
+    const deductions = await db.listDeductionsForInvoice(env, inv.id);
+    await sendTelegram(env, chatId, `📍 ${bookingNo} (${inv.client_name}): ${computeStage(inv, deductions)}`);
+    return json({ ok: true });
+  }
+
+  const deductMatch = statusText.match(DEDUCT_RE);
+  if (deductMatch) return telegramDeductCommand(env, chatId, inv, Number(deductMatch[1]), deductMatch[2].trim());
+
+  const postponeMatch = statusText.match(POSTPONE_RE);
+  if (postponeMatch) return telegramPostponeCommand(env, chatId, inv, postponeMatch[1]);
+
+  // Addendum 7 — "paid <amount>" (or a bare amount) triggers amount-matching
+  // instead of a fixed phrase: match against every combination this booking could
+  // still owe, stage it, and wait for an explicit confirm — see §7b/answer #4.
+  // Checked before STATUS_PHRASES since a bare number never matches any of those
+  // regexes anyway, but kept explicit for clarity.
+  const amountMatch = statusText.match(AMOUNT_PAID_RE);
+  if (amountMatch) return telegramAmountPaid(env, chatId, inv, Number(amountMatch[1]), paymentMeta);
+
+  const match = STATUS_PHRASES.find((p) => p.re.test(statusText));
+  if (!match) {
+    await sendTelegram(env, chatId,
+      `⚠️ Didn't recognize "${statusText}" for ${bookingNo}. Try: "rental paid", "deposit paid", "cleaning paid", "deposit refunded", "partially paid", ` +
+      `"paid 637" (amount-matching), "deduct 150 reason: ...", "postpone to YYYY-MM-DD", or "stage".`);
+    return json({ ok: true });
+  }
+  // Resolved against THIS booking's cleaning_fee_with — see STATUS_PHRASES' comment
+  // and resolveApply: "rental paid"/"deposit paid" only bundle cleaning_fee_status
+  // when the cleaning fee is actually allocated to that side.
+  const applied = resolveApply(match, inv);
+
+  // Auto-log a matching payments-table entry the FIRST time each field actually
+  // flips to paid/held — otherwise "Total received"/"Balance outstanding" (and the
+  // PayNow QR's show-if-balance>0 check) never learn that a Telegram-marked payment
+  // came in, since those are computed from the payments log, not the status fields
+  // directly. Compares before/after per field so bundled ("deposit paid" also flips
+  // cleaning_fee_status) and standalone ("cleaning paid" alone) cases both log
+  // correctly without double-counting on a repeated command.
+  const paymentLogs = [];
+  if (applied.payment_status === "Paid" && inv.payment_status !== "Paid") {
+    paymentLogs.push({ amount: rentalDueAmount(inv), kind: "balance", note: "Auto-logged (Telegram: rental paid)" });
+  }
+  if (applied.deposit_status === "Held" && inv.deposit_status !== "Held") {
+    paymentLogs.push({ amount: Number(inv.deposit_amount || 0), kind: "deposit", note: "Auto-logged (Telegram: deposit paid)" });
+  }
+  if (applied.cleaning_fee_status === "Paid" && inv.cleaning_fee_status !== "Paid") {
+    paymentLogs.push({ amount: Number(inv.cleaning_fee || 0), kind: "cleaning_fee", note: "Auto-logged (Telegram: cleaning fee paid)" });
+  }
+  // Refund (Addendum 4): amount is the deposit MINUS any deductions filed on this
+  // booking, so this correctly logs the full deposit for a plain refund or just the
+  // remaining balance after a deduction, without the caller needing to know which.
+  if (applied.deposit_status === "Refunded" && inv.deposit_status !== "Refunded") {
+    const deductions = await db.listDeductionsForInvoice(env, inv.id);
+    const deductedTotal = deductions.reduce((s, d) => s + Number(d.amount || 0), 0);
+    const refundAmount = Math.max(0, Number(inv.deposit_amount || 0) - deductedTotal);
+    paymentLogs.push({ amount: refundAmount, kind: "refund", note: "Auto-logged (Telegram: refunded)" });
   }
 
   // "cleaning_fee_status" alongside "payment_status"/"deposit_status" in the SAME
@@ -831,7 +1037,92 @@ async function telegramStatusUpdate(env, chatId, bookingNo, rawStatusText) {
   // bundling the cleaning fee this time (see resolveApply) — worth calling out
   // since the label itself no longer says so unconditionally.
   const cleaningBundled = applied.cleaning_fee_status === "Paid" && (applied.payment_status !== undefined || applied.deposit_status !== undefined);
-  await sendTelegram(env, chatId, `✅ ${bookingNo}: ${match.label}${cleaningBundled ? " (cleaning fee bundled in)" : ""}.${refileNote}${pendingDeductionWarning}`);
+  await applyStatusChangeAndNotify(env, chatId, inv, applied, {
+    paymentLogs, paymentMeta,
+    generateReceipt: !!match.receipt,
+    label: `${match.label}${cleaningBundled ? " (cleaning fee bundled in)" : ""}`,
+  });
+  return json({ ok: true });
+}
+
+// Social: rental_total + pet_fee. Corporate/Seminar: same, minus the flat $
+// discount (not already netted into rental_total there — see pricing.js).
+function rentalDueAmount(inv) {
+  return inv.event_type === "Social"
+    ? round2(Number(inv.rental_total) + Number(inv.pet_fee || 0))
+    : round2(Number(inv.rental_total) + Number(inv.pet_fee || 0) - Number(inv.discount || 0));
+}
+
+// Addendum 7 — every payment combination this booking could still owe, given
+// what's already paid and which side the cleaning fee is allocated to (answer
+// #4: "rental only / rental+cleaning / deposit / deposit+cleaning / everything
+// combined" — no standalone "cleaning only", the existing "cleaning paid" phrase
+// already covers that). Each combo's `kind` maps to an `applied` status object
+// via paymentMatchToApplied.
+function computePaymentCombinations(inv) {
+  const rentalAmt = rentalDueAmount(inv);
+  const cleaningAmt = Number(inv.cleaning_fee || 0);
+  const depositAmt = Number(inv.deposit_amount || 0);
+  const cleaningWithRental = (inv.cleaning_fee_with || "deposit") === "rental";
+  const rentalOwed = inv.payment_status !== "Paid";
+  const depositOwed = inv.deposit_status !== "Held" && inv.deposit_status !== "Refunded";
+  const cleaningOwed = inv.cleaning_fee_status !== "Paid" && cleaningAmt > 0;
+
+  const combos = [];
+  if (rentalOwed) combos.push({ kind: "rental", amount: rentalAmt, label: "Rental fee only" });
+  if (rentalOwed && cleaningWithRental && cleaningOwed) {
+    combos.push({ kind: "rental_cleaning", amount: round2(rentalAmt + cleaningAmt), label: "Rental fee + cleaning fee" });
+  }
+  if (depositOwed) combos.push({ kind: "deposit", amount: depositAmt, label: "Deposit only" });
+  if (depositOwed && !cleaningWithRental && cleaningOwed) {
+    combos.push({ kind: "deposit_cleaning", amount: round2(depositAmt + cleaningAmt), label: "Deposit + cleaning fee" });
+  }
+  if (rentalOwed && depositOwed) {
+    combos.push({ kind: "combined", amount: round2(rentalAmt + cleaningAmt + depositAmt), label: "Everything combined (rental + cleaning + deposit)" });
+  }
+  return combos;
+}
+
+// `kind` -> the `applied` status object + payment-log rows to insert on confirm.
+function paymentMatchToApplied(inv, kind) {
+  const rentalAmt = rentalDueAmount(inv);
+  const cleaningAmt = Number(inv.cleaning_fee || 0);
+  const depositAmt = Number(inv.deposit_amount || 0);
+  const RENTAL_LOG = { amount: rentalAmt, kind: "balance", note: "Auto-logged (Telegram: amount-matched payment)" };
+  const CLEANING_LOG = { amount: cleaningAmt, kind: "cleaning_fee", note: "Auto-logged (Telegram: amount-matched payment)" };
+  const DEPOSIT_LOG = { amount: depositAmt, kind: "deposit", note: "Auto-logged (Telegram: amount-matched payment)" };
+  switch (kind) {
+    case "rental": return { applied: { payment_status: "Paid" }, paymentLogs: [RENTAL_LOG] };
+    case "rental_cleaning": return { applied: { payment_status: "Paid", cleaning_fee_status: "Paid" }, paymentLogs: [RENTAL_LOG, CLEANING_LOG] };
+    case "deposit": return { applied: { deposit_status: "Held" }, paymentLogs: [DEPOSIT_LOG] };
+    case "deposit_cleaning": return { applied: { deposit_status: "Held", cleaning_fee_status: "Paid" }, paymentLogs: [DEPOSIT_LOG, CLEANING_LOG] };
+    case "combined": return { applied: { payment_status: "Paid", deposit_status: "Held", cleaning_fee_status: "Paid" }, paymentLogs: [RENTAL_LOG, CLEANING_LOG, DEPOSIT_LOG] };
+    default: throw new Error("Unknown payment match kind: " + kind);
+  }
+}
+
+const AMOUNT_PAID_RE = /^(?:paid\s+)?\$?(\d+(?:\.\d+)?)$/i;
+
+// Matches a stated amount, stages it as a pending_payment_action, and asks
+// Kenneth to confirm before anything is applied. No match -> warn with what WAS
+// expected (helps catch a wrong-amount transfer), apply nothing.
+async function telegramAmountPaid(env, chatId, inv, amount, paymentMeta) {
+  const combos = computePaymentCombinations(inv);
+  const match = combos.find((c) => Math.abs(c.amount - amount) < 0.01);
+  if (!match) {
+    const expected = combos.length
+      ? combos.map((c) => `${c.label}: $${c.amount.toFixed(2)}`).join("\n")
+      : "(nothing outstanding on this booking)";
+    await sendTelegram(env, chatId, `⚠️ $${amount.toFixed(2)} doesn't match any expected amount for ${inv.booking_no}. Expected one of:\n${expected}`);
+    return json({ ok: true });
+  }
+  const pendingId = await db.createPendingPaymentAction(env, chatId, inv.id, {
+    amount, matched_kind: match.kind, payment_mode: paymentMeta.payment_mode, bank: paymentMeta.bank, reference: paymentMeta.reference,
+  });
+  await sendTelegram(env, chatId,
+    `💰 $${amount.toFixed(2)} for ${inv.booking_no} matches: ${match.label}. Confirm?`,
+    [[{ text: "✅ Confirm", callback_data: `confirmpay:${pendingId}` }, { text: "❌ Cancel", callback_data: `cancelpay:${pendingId}` }]]
+  );
   return json({ ok: true });
 }
 
@@ -923,6 +1214,19 @@ async function generateAndSendReceipt(env, chatId, inv) {
   }
 }
 
+// Addendum 7 — builds a WhatsApp message from an editable template (see
+// message_templates in schema.sql) plus any dynamic links appended below it.
+async function buildWaMessage(env, templateKey, extraLines) {
+  const body = await db.getMessageTemplate(env, templateKey);
+  return [body, ...(extraLines || [])].filter(Boolean).join("\n\n");
+}
+
+// A Telegram inline button that opens WhatsApp pre-composed via wa.me — or null
+// if this booking has no phone on file, since there's nothing to link to.
+function waButton(text, phone, message) {
+  return phone ? { text, url: waLink(phone, message) } : null;
+}
+
 async function telegramCallback(env, cq) {
   const chatId = String(cq.message && cq.message.chat && cq.message.chat.id);
   if (!env.TELEGRAM_CHAT_ID || chatId !== String(env.TELEGRAM_CHAT_ID)) {
@@ -941,13 +1245,17 @@ async function telegramCallback(env, cq) {
       const row = await db.createInvoice(env, pending.data);
       await db.deletePendingBooking(env, ref);
       await answerCallbackQuery(env, cq.id, "Confirmed!");
+      const confirmedWaBtn = waButton("📱 WhatsApp client", row.client_phone, await buildWaMessage(env, "booking_confirmed"));
       await sendTelegram(env, chatId,
         `✅ ${row.booking_no} created for ${row.client_name}. Not sent to the client yet.`,
-        [[
-          { text: "📤 Send signing link", callback_data: `send:${row.booking_no}` },
-          { text: "👁 Preview", callback_data: `preview:${row.booking_no}` },
-          { text: "✏️ Edit", callback_data: `edit:${row.booking_no}` },
-        ]]
+        [
+          [
+            { text: "📤 Send signing link", callback_data: `send:${row.booking_no}` },
+            { text: "👁 Preview", callback_data: `preview:${row.booking_no}` },
+            { text: "✏️ Edit", callback_data: `edit:${row.booking_no}` },
+          ],
+          ...(confirmedWaBtn ? [[confirmedWaBtn]] : []),
+        ]
       );
     } else if (action === "cancel") {
       await db.deletePendingBooking(env, ref);
@@ -958,7 +1266,11 @@ async function telegramCallback(env, cq) {
       await answerCallbackQuery(env, cq.id);
       if (!inv) { await sendTelegram(env, chatId, `⚠️ ${ref} not found.`); return json({ ok: true }); }
       await db.markTimestampOnce(env, inv.id, "sent_at"); // starts the 3-day unsigned-reminder clock
-      await sendTelegram(env, chatId, `Signing link for ${ref} (forward this to the client):\n${env.PUBLIC_BASE_URL}/sign/${inv.token}`);
+      const link = `${env.PUBLIC_BASE_URL}/sign/${inv.token}`;
+      const sendWaBtn = waButton("📱 Send via WhatsApp", inv.client_phone,
+        await buildWaMessage(env, "agreement_send", [link, env.HOUSE_RULES_URL]));
+      await sendTelegram(env, chatId, `Signing link for ${ref} (forward this to the client):\n${link}`,
+        sendWaBtn ? [[sendWaBtn]] : undefined);
     } else if (action === "preview") {
       const inv = await db.getInvoiceByBookingNo(env, ref);
       await answerCallbackQuery(env, cq.id, "Generating preview...");
@@ -970,6 +1282,28 @@ async function telegramCallback(env, cq) {
       await sendTelegram(env, chatId,
         `To edit ${ref}: void it from /admin, then resend the corrected booking details as a new message. ` +
         `(Field-level editing via Telegram isn't built yet — this is the v1 workaround.)`);
+    } else if (action === "confirmpay") {
+      const pending = await db.getPendingPaymentAction(env, ref);
+      if (!pending) {
+        await answerCallbackQuery(env, cq.id, "This has expired or was already handled.");
+        return json({ ok: true });
+      }
+      const inv = await db.getInvoiceById(env, pending.invoice_id);
+      await db.deletePendingPaymentAction(env, ref);
+      if (!inv) { await answerCallbackQuery(env, cq.id); await sendTelegram(env, chatId, `⚠️ Booking no longer exists.`); return json({ ok: true }); }
+      await answerCallbackQuery(env, cq.id, "Confirmed!");
+      const { applied, paymentLogs } = paymentMatchToApplied(inv, pending.matched_kind);
+      const label = { rental: "Rental fee only", rental_cleaning: "Rental fee + cleaning fee", deposit: "Deposit only", deposit_cleaning: "Deposit + cleaning fee", combined: "Everything combined" }[pending.matched_kind];
+      await applyStatusChangeAndNotify(env, chatId, inv, applied, {
+        paymentLogs,
+        paymentMeta: { payment_mode: pending.payment_mode, bank: pending.bank, reference: pending.reference },
+        generateReceipt: applied.payment_status === "Paid" && inv.payment_status !== "Paid",
+        label: `$${Number(pending.amount).toFixed(2)} matched — ${label}`,
+      });
+    } else if (action === "cancelpay") {
+      await db.deletePendingPaymentAction(env, ref);
+      await answerCallbackQuery(env, cq.id, "Cancelled.");
+      await sendTelegram(env, chatId, "❌ Payment match discarded — nothing was applied.");
     } else {
       await answerCallbackQuery(env, cq.id);
     }
@@ -980,10 +1314,13 @@ async function telegramCallback(env, cq) {
   return json({ ok: true });
 }
 
+// Label class includes ".()" (not just letters/spaces/slash) so real WhatsApp-
+// template labels like "No. Of Hours:" and "Name of Host (as in NRIC)/ Company:"
+// parse correctly, not just the strict template's simpler labels (Addendum 7).
 function parseTelegramTemplate(text) {
   const fields = {};
   for (const line of text.split(/\r?\n/)) {
-    const m = line.match(/^\s*([A-Za-z][A-Za-z /]*?)\s*:\s*(.*)$/);
+    const m = line.match(/^\s*([A-Za-z][A-Za-z /.()]*?)\s*:\s*(.*)$/);
     if (m) fields[m[1].trim().toLowerCase()] = m[2].trim();
   }
   return fields;

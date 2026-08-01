@@ -223,3 +223,52 @@ CREATE TABLE IF NOT EXISTS pending_bookings (
   data         TEXT    NOT NULL, -- JSON blob: all fields createInvoice() needs
   created_at   TEXT    NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Addendum 7 (2026-08-01) — WhatsApp-quote-template accumulation. Kenneth forwards
+-- his real WhatsApp quote as up to 3 SEPARATE messages (Event details / Quote /
+-- Particulars), which may arrive in any order across a stretch of the conversation.
+-- One row per chat_id holds whatever's been parsed out of each message type so far
+-- as it arrives; `telegramNewBooking` merges each new message into whichever field
+-- group it matches, replies with what's still missing, and only produces a
+-- pending_bookings row (the existing confirm flow) once all 3 have contributed.
+-- ON CONFLICT REPLACE per chat_id (not a real conflict resolution — a chat only
+-- ever has one booking's worth of forwarded templates in flight at a time; a NEW
+-- Event-details message restarts accumulation rather than merging into a stale one,
+-- see worker.js).
+CREATE TABLE IF NOT EXISTS pending_wa_accumulation (
+  chat_id            TEXT PRIMARY KEY,
+  event_details      TEXT,  -- JSON: {date_of_event, hours, start_time, event_type}, NULL until that message arrives
+  quote               TEXT,  -- JSON: {usual_rate, package_rate, total, discount_percent, final_price, cleaning_fee, deposit_amount}
+  particulars         TEXT,  -- JSON: {name, nric_last4, contact, email, event_type}
+  updated_at          TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Addendum 7 — a proposed payment match awaiting Kenneth's explicit confirm before
+-- anything is applied or filed. Populated when a stated amount matches one of a
+-- booking's expected combinations (rental / rental+cleaning / deposit /
+-- deposit+cleaning / everything combined); same round-trip-by-small-integer-id
+-- pattern as pending_bookings, for the same 64-byte callback_data reason.
+CREATE TABLE IF NOT EXISTS pending_payment_actions (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id      TEXT    NOT NULL,
+  invoice_id   INTEGER NOT NULL REFERENCES invoices(id),
+  amount       REAL    NOT NULL,
+  matched_kind TEXT    NOT NULL, -- rental | rental_cleaning | deposit | deposit_cleaning | combined
+  payment_mode TEXT,
+  bank         TEXT,
+  reference    TEXT,
+  created_at   TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Addendum 7 — editable WhatsApp message wordings (wa.me deep links), seeded with
+-- Kenneth's real current phrasing so he can tweak wording later via a Telegram
+-- command without a code change or redeploy.
+CREATE TABLE IF NOT EXISTS message_templates (
+  key        TEXT PRIMARY KEY,  -- agreement_send | after_sign_payment | booking_confirmed
+  body       TEXT    NOT NULL,
+  updated_at TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+INSERT OR IGNORE INTO message_templates (key, body) VALUES
+  ('agreement_send', 'This is the agreement, you take a look. All good u can sign n Paynow to us 😊'),
+  ('after_sign_payment', 'Once you signed n make the payment. Screenshot to me 😊'),
+  ('booking_confirmed', 'We had block out ur date already 😊');

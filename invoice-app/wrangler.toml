@@ -65,3 +65,5 @@ BUSINESS_ADDRESS  = "81 Tagore Lane #03-20, Singapore 787502"
 # matching the real Zoho samples — no env var for these existed before now.
 BUSINESS_PHONE    = "(+65)8509 9176"
 BUSINESS_EMAIL    = "bojiovenue@gmail.com"
+# Addendum 7: house rules link included in the agreement-send WhatsApp message.
+HOUSE_RULES_URL   = "https://go.bojiovenue.com/rules-8f2k.html"

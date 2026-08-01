@@ -35,6 +35,17 @@ import { startBrandedDoc, drawBrandedCards, drawPageFooters, COLOR_TEXT, COLOR_C
 const money = (n) => "$" + Number(n || 0).toFixed(2);
 const noteSuffix = (note) => (note ? ` (${note})` : "");
 
+// Addendum 7 (2026-08-01): the Grand Total line's payment-deadline note, confirmed
+// against a real signed agreement (event 15 Aug 2026 -> "no later than 8 Aug 26")
+// and Clause 3.1's own stated deadline — event date minus 7 days, "D Mon YY".
+const DEADLINE_MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function paymentDeadlineNote(bookingDateStr) {
+  const d = new Date(String(bookingDateStr).slice(0, 10) + "T00:00:00");
+  d.setDate(d.getDate() - 7);
+  const yy = String(d.getFullYear()).slice(-2);
+  return `${d.getDate()} ${DEADLINE_MON[d.getMonth()]} ${yy}`;
+}
+
 // The Social breakdown block, inserted in place of a plain "Rental Fee: $X" line.
 // `clauseRef` is the promo-clause cross-reference suffix ("Refer to Clause 5.6" /
 // "4.6"), passed in so both templates can reuse this without duplicating the
@@ -79,7 +90,7 @@ function wholeVenueContent(env, b) {
     { p: `- Security Deposit: ${money(b.deposit_amount)} (refundable, subject to Clause 8)${noteSuffix(b.deposit_note)}` },
     { p: `- Cleaning Fee: ${money(b.cleaning_fee)}${noteSuffix(b.cleaning_fee_note)}` },
     ...(Number(b.pet_fee) > 0 ? [{ p: `- Pet Cleaning Fee: ${money(b.pet_fee)}${noteSuffix(b.pet_fee_note)}` }] : []),
-    { p: `Grand Total: ${money(grandTotal)}, payable to PayNow UEN: ${env.BUSINESS_UEN || ""} (${env.BUSINESS_ENTITY || "Novan Management"})` },
+    { p: `Grand Total: ${money(grandTotal)} (Cleaning fee and security deposit to be paid no later than ${paymentDeadlineNote(b.booking_date)}), payable to PayNow UEN: ${env.BUSINESS_UEN || ""} (${env.BUSINESS_ENTITY || "Novan Management"})` },
 
     { newCard: true, h: "3. Booking and Payment" },
     { p: "3.1 The booking is confirmed upon receipt of full payment of the rental fee, payable to Novan Management. The security deposit and any applicable cleaning fees must be paid no later than seven (7) days before the event date, unless otherwise stated in Clause 2." },
@@ -153,7 +164,7 @@ function mainHallContent(env, b) {
     { p: `- Security Deposit: ${money(b.deposit_amount)} (Refundable, see Clause 7)${noteSuffix(b.deposit_note)}` },
     { p: `- Cleaning Fee: ${money(b.cleaning_fee)} (Non-refundable)${noteSuffix(b.cleaning_fee_note)}` },
     ...(Number(b.pet_fee) > 0 ? [{ p: `- Pet Cleaning Fee: ${money(b.pet_fee)}${noteSuffix(b.pet_fee_note)}` }] : []),
-    { p: `Grand Total: ${money(grandTotal)}, payable to PayNow UEN: ${env.BUSINESS_UEN || ""} (${env.BUSINESS_ENTITY || "Novan Management"})` },
+    { p: `Grand Total: ${money(grandTotal)} (Cleaning fee and security deposit to be paid no later than ${paymentDeadlineNote(b.booking_date)}), payable to PayNow UEN: ${env.BUSINESS_UEN || ""} (${env.BUSINESS_ENTITY || "Novan Management"})` },
 
     { newCard: true, h: "3. Facilities Included" },
     { p: "Rental includes use of: Tables & chairs, TV screen / Projector, Wi-Fi, Water dispenser, Toilet access. No use of entertainment facilities (KTV system, pool table, darts, arcade, etc.) is included." },
