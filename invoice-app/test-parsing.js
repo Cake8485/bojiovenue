@@ -10,7 +10,7 @@
 
 import assert from "node:assert/strict";
 import {
-  parseTelegramTemplate, parseFlexibleDate, parseLooseNumber,
+  parseTelegramTemplate, parseFlexibleDate, parseLooseNumber, parseFlexibleTime, extractDollarNear,
   detectWaTemplateType, parseWaEventDetails, parseWaQuote, parseWaParticulars, waAccumulationToFields,
 } from "./src/parsing.js";
 
@@ -89,6 +89,54 @@ test("parseLooseNumber: unparseable returns null, never NaN or a silent 0", () =
 });
 
 // ---------------------------------------------------------------------------
+// parseFlexibleTime
+// ---------------------------------------------------------------------------
+test("parseFlexibleTime: real WhatsApp-template value '11.00am' (period separator, am/pm)", () => {
+  assert.equal(parseFlexibleTime("11.00am"), "11:00");
+});
+test("parseFlexibleTime: 24h 'HH:MM' unchanged (existing strict-template format)", () => {
+  assert.equal(parseFlexibleTime("18:00"), "18:00");
+  assert.equal(parseFlexibleTime("14:00"), "14:00");
+});
+test("parseFlexibleTime: colon separator with am/pm", () => {
+  assert.equal(parseFlexibleTime("6:30pm"), "18:30");
+});
+test("parseFlexibleTime: bare hour with am/pm, no minutes", () => {
+  assert.equal(parseFlexibleTime("6pm"), "18:00");
+  assert.equal(parseFlexibleTime("9am"), "09:00");
+});
+test("parseFlexibleTime: 12am/12pm edge cases (midnight/noon)", () => {
+  assert.equal(parseFlexibleTime("12am"), "00:00");
+  assert.equal(parseFlexibleTime("12pm"), "12:00");
+});
+test("parseFlexibleTime: unparseable input returns null, not a guess", () => {
+  assert.equal(parseFlexibleTime("evening"), null);
+  assert.equal(parseFlexibleTime(""), null);
+  assert.equal(parseFlexibleTime("25:00"), null);
+});
+
+// ---------------------------------------------------------------------------
+// extractDollarNear — real quote template's "1) $80 Cleaning fee" / "2) $500
+// deposit (...)" shape: amount BEFORE the label, numbered list, no colon at
+// all, so parseTelegramTemplate's label:value matching never sees these lines.
+// ---------------------------------------------------------------------------
+test("extractDollarNear: amount-before-label, real default-quote wording ('1) $80 Cleaning fee')", () => {
+  assert.equal(extractDollarNear("1) $80 Cleaning fee", "cleaning"), "80");
+});
+test("extractDollarNear: amount-before-label with a trailing parenthetical ('2) $500 deposit (Refundable...)')", () => {
+  assert.equal(extractDollarNear("2) $500 deposit (Refundable within 5 working days after the event)", "deposit"), "500");
+});
+test("extractDollarNear: real promo-quote wording ('1) $61 Cleaning fee')", () => {
+  assert.equal(extractDollarNear("1) $61 Cleaning fee", "cleaning"), "61");
+});
+test("extractDollarNear: falls back to label-before-amount phrasing ('Cleaning Fee: $80/-')", () => {
+  assert.equal(extractDollarNear("Cleaning Fee: $80/-", "cleaning"), "80");
+});
+test("extractDollarNear: no match returns null", () => {
+  assert.equal(extractDollarNear("nothing relevant here", "cleaning"), null);
+});
+
+// ---------------------------------------------------------------------------
 // parseTelegramTemplate — label punctuation
 // ---------------------------------------------------------------------------
 test("parseTelegramTemplate: label with a period ('No. Of Hours:')", () => {
@@ -110,6 +158,19 @@ test("parseTelegramTemplate: label containing a digit ('Last 4 Digit NRIC / UEN:
 });
 test("parseTelegramTemplate: a bare digit-first line (e.g. a lone time) is never misread as a label", () => {
   const f = parseTelegramTemplate("18:00");
+  assert.deepEqual(f, {});
+});
+test("parseTelegramTemplate: emoji-prefixed label, real template wording ('📅 Date Of Event:  21Aug26') — real bug, found against Kenneth's actual message", () => {
+  const f = parseTelegramTemplate("📅 Date Of Event:  21Aug26");
+  assert.equal(f["date of event"], "21Aug26");
+});
+test("parseTelegramTemplate: multiple different emoji prefixes in one message", () => {
+  const f = parseTelegramTemplate("🆔 Last 4 Digit NRIC / UEN:  661A\n📱 Contact Number:  93219316");
+  assert.equal(f["last 4 digit nric / uen"], "661A");
+  assert.equal(f["contact number"], "93219316");
+});
+test("parseTelegramTemplate: a line with no letters at all (pure emoji/punctuation) yields no field, doesn't throw", () => {
+  const f = parseTelegramTemplate("👍👍👍");
   assert.deepEqual(f, {});
 });
 
@@ -161,17 +222,119 @@ test("parseWaParticulars: real template shape", () => {
   assert.equal(parsed.contact, "91234567");
 });
 
-test("waAccumulationToFields + downstream loose parsing round-trips correctly", () => {
+// ---------------------------------------------------------------------------
+// Kenneth's ACTUAL real WhatsApp templates, verbatim (2026-08-02) — the ones
+// this whole §5b feature was built for. Emoji, spacing, and all. Sent as two
+// variants of message 2 (his current promo, and the underlying default he
+// clarified afterward) to prove extractDollarNear handles both amounts the
+// same way, not just whichever one happened to be sent first.
+// ---------------------------------------------------------------------------
+const REAL_MSG_EVENT_DETAILS =
+  "📅 Date Of Event:  21Aug26\n" +
+  "⏰ No. Of Hours:  8hours \n" +
+  "🕒 Start Time of Event:  11.00am\n" +
+  "🎈 Type Of Event: Birthday (e.g. birthday, wedding, hens party, DnD etc.)";
+
+const REAL_MSG_QUOTE_PROMO =
+  "Usual rate: $180/hour\n" +
+  "Package 8 hours: $150/hr \n" +
+  "Total: $1200/-\n\n" +
+  "Promo: Discount 10%\n" +
+  "Final Price: $1080/-\n\n" +
+  "Note there are 2 miscellaneous charges paid 1 week before booking\n\n" +
+  "1) $61 Cleaning fee\n" +
+  "2) $500 deposit (Refundable within 5 working days after the event)\n\n" +
+  "Free setup: 30min pre setup n 15mins ending";
+
+const REAL_MSG_QUOTE_DEFAULT =
+  "Usual rate: $180/hour\n" +
+  "Package 8 hours: $150/hr \n" +
+  "Total: $1200/-\n\n" +
+  "Note there are 2 miscellaneous charges paid 1 week before booking\n\n" +
+  "1) $80 Cleaning fee\n" +
+  "2) $500 deposit (Refundable within 5 working days after the event)\n\n" +
+  "Free setup: 30min pre setup n 15mins ending";
+
+const REAL_MSG_PARTICULARS =
+  "👤 Name of Host (as in NRIC)/ Company:  Carine Liang\n" +
+  "🆔 Last 4 Digit NRIC / UEN:  661A\n" +
+  "📱 Contact Number:  93219316\n" +
+  "📧 Email Address:  cake8485@gmail.com\n" +
+  "✨ Event Type: Birthday";
+
+test("detectWaTemplateType correctly classifies all 3 real messages despite emoji", () => {
+  assert.equal(detectWaTemplateType(REAL_MSG_EVENT_DETAILS), "event_details");
+  assert.equal(detectWaTemplateType(REAL_MSG_QUOTE_PROMO), "quote");
+  assert.equal(detectWaTemplateType(REAL_MSG_PARTICULARS), "particulars");
+});
+
+test("parseWaEventDetails: real message — emoji-prefixed labels, '11.00am' time, hint-suffixed event type", () => {
+  const parsed = parseWaEventDetails(REAL_MSG_EVENT_DETAILS);
+  assert.equal(parsed.date_of_event, "21Aug26");
+  assert.equal(parsed.hours, "8hours");
+  assert.equal(parsed.start_time, "11.00am");
+  assert.equal(parsed.event_type, "Birthday (e.g. birthday, wedding, hens party, DnD etc.)");
+});
+
+test("parseWaQuote: real promo message — numbered-list cleaning fee/deposit, no colon", () => {
+  const parsed = parseWaQuote(REAL_MSG_QUOTE_PROMO);
+  assert.equal(parsed.package_hours, "8");
+  assert.equal(parsed.package_rate, "150");
+  assert.equal(parsed.discount_percent, "10");
+  assert.equal(parsed.cleaning_fee, "61");
+  assert.equal(parsed.deposit_amount, "500");
+});
+
+test("parseWaQuote: real default (no-promo) message — same numbered-list shape, different cleaning fee, no discount", () => {
+  const parsed = parseWaQuote(REAL_MSG_QUOTE_DEFAULT);
+  assert.equal(parsed.package_hours, "8");
+  assert.equal(parsed.package_rate, "150");
+  assert.equal(parsed.discount_percent, null);
+  assert.equal(parsed.cleaning_fee, "80");
+  assert.equal(parsed.deposit_amount, "500");
+});
+
+test("parseWaParticulars: real message — emoji-prefixed labels, digit-containing NRIC label", () => {
+  const parsed = parseWaParticulars(REAL_MSG_PARTICULARS);
+  assert.equal(parsed.name, "Carine Liang");
+  assert.equal(parsed.nric_last4, "661A");
+  assert.equal(parsed.contact, "93219316");
+  assert.equal(parsed.email, "cake8485@gmail.com");
+  assert.equal(parsed.event_type, "Birthday");
+});
+
+test("waAccumulationToFields: full real 3-message accumulation (promo) — event_type forced to Social, occasion moved to purpose, hint stripped", () => {
   const acc = {
-    event_details: { date_of_event: "21Aug26", hours: "8hours", start_time: "18:00", event_type: "Social" },
-    quote: { package_rate: "150", discount_percent: null, cleaning_fee: "$80/-", deposit_amount: "$500/-" },
-    particulars: { name: "Bug Fix Test", nric_last4: "161E", contact: "91006003", email: "test@example.com" },
+    event_details: parseWaEventDetails(REAL_MSG_EVENT_DETAILS),
+    quote: parseWaQuote(REAL_MSG_QUOTE_PROMO),
+    particulars: parseWaParticulars(REAL_MSG_PARTICULARS),
   };
   const fields = waAccumulationToFields(acc);
-  assert.equal(fields.name, "Bug Fix Test");
+  assert.equal(fields.name, "Carine Liang");
+  assert.equal(fields["nric/uen"], "661A");
+  assert.equal(fields["event type"], "Social"); // pricing-engine selector, NOT the occasion
+  assert.equal(fields.purpose, "Birthday"); // occasion, hint suffix stripped, lives here instead
   assert.equal(parseFlexibleDate(fields["date of event"]), "2026-08-21");
   assert.equal(parseLooseNumber(fields.duration), 8);
+  assert.equal(parseFlexibleTime(fields["time start"]), "11:00");
   assert.equal(parseLooseNumber(fields.rate), 150);
+  assert.equal(fields.discount, "10");
+  assert.equal(parseLooseNumber(fields["cleaning fee"]), 61);
+  assert.equal(parseLooseNumber(fields.deposit), 500);
+  assert.equal(fields.contact, "93219316");
+  assert.equal(fields.email, "cake8485@gmail.com");
+});
+
+test("waAccumulationToFields: full real 3-message accumulation (default, no promo) — cleaning fee differs, discount blank", () => {
+  const acc = {
+    event_details: parseWaEventDetails(REAL_MSG_EVENT_DETAILS),
+    quote: parseWaQuote(REAL_MSG_QUOTE_DEFAULT),
+    particulars: parseWaParticulars(REAL_MSG_PARTICULARS),
+  };
+  const fields = waAccumulationToFields(acc);
+  assert.equal(fields["event type"], "Social");
+  assert.equal(fields.purpose, "Birthday");
+  assert.equal(fields.discount, "");
   assert.equal(parseLooseNumber(fields["cleaning fee"]), 80);
   assert.equal(parseLooseNumber(fields.deposit), 500);
 });

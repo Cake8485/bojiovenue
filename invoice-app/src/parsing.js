@@ -13,9 +13,24 @@
 // null on real input (2026-08-02, found by test-parsing.js). The label must
 // still START with a letter (leading class stays [A-Za-z], not widened) so a
 // bare time value like "18:00" on its own line is never misread as a label.
+//
+// Each line first has any leading non-letter "decoration" stripped (2026-08-02,
+// Kenneth's real templates: "📅 Date Of Event:", "🆔 Last 4 Digit NRIC / UEN:" —
+// every label in 2 of his 3 real templates is emoji-prefixed. Without this, the
+// leading-letter requirement above made the WHOLE line fail to match, so every
+// field in those two templates came back null — the previous "provisional"
+// regexes were never actually exercised against real emoji-prefixed input
+// before now). `\p{L}` (Unicode letter) + `u` flag so a multi-code-unit emoji
+// strips as one character, not a mangled half-surrogate. A line that already
+// starts with a letter is untouched (empty match → no-op replace).
+function stripLeadingDecoration(line) {
+  return line.replace(/^[^\p{L}:]+/u, "");
+}
+
 export function parseTelegramTemplate(text) {
   const fields = {};
-  for (const line of text.split(/\r?\n/)) {
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = stripLeadingDecoration(rawLine);
     const m = line.match(/^\s*([A-Za-z][A-Za-z0-9 /.()]*?)\s*:\s*(.*)$/);
     if (m) fields[m[1].trim().toLowerCase()] = m[2].trim();
   }
@@ -44,6 +59,27 @@ export function parseFlexibleDate(raw) {
     }
   }
   return null;
+}
+
+// Accepts 24h "HH:MM" (§5a's strict format, unchanged) or 12h with a "." or ":"
+// separator and an am/pm suffix — "11.00am" (Kenneth's real WhatsApp-template
+// value, 2026-08-02) or "6pm"/"6:00pm". No am/pm suffix is always read as
+// literal 24h (so "18:00" and "14:00" behave exactly as before — no ambiguity,
+// since a 24h reading of e.g. "11:00" already means 11am). Returns "HH:MM" or
+// null. Downstream, addHours() (worker.js) only understands "HH:MM" — feeding
+// it a raw "11.00am" silently returned null with no warning (no crash, just a
+// blank end_time on the agreement); this normalizes before that ever happens.
+export function parseFlexibleTime(raw) {
+  const s = String(raw || "").trim();
+  const m = s.match(/^(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)?$/i);
+  if (!m) return null;
+  let hour = Number(m[1]);
+  const minute = m[2] ? Number(m[2]) : 0;
+  const ampm = m[3] ? m[3].toLowerCase() : null;
+  if (hour > 23 || minute > 59) return null;
+  if (ampm === "am" && hour === 12) hour = 0;
+  else if (ampm === "pm" && hour !== 12) hour += 12;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }
 
 // Extracts the first number out of a loosely-formatted value: strips a leading
@@ -93,6 +129,24 @@ export function parseWaEventDetails(text) {
   };
 }
 
+// Cleaning fee / deposit in Kenneth's real quote template are a numbered list
+// with the dollar amount BEFORE the label and no colon at all — "1) $61
+// Cleaning fee" / "2) $500 deposit (Refundable...)" — not the "Cleaning Fee:
+// $80/-" shape originally guessed at, so parseTelegramTemplate's label:value
+// matching never sees these lines (no colon = not a label line) and both
+// values silently came back null (2026-08-02, found against Kenneth's real
+// message — silent because an unset override just falls back to the pricing
+// engine's default fee/deposit rather than erroring, so a real $61 promo
+// cleaning fee would have been quietly billed at the $80 default). Matches
+// amount-before-label first (the real format); falls back to label-before-
+// amount ("Cleaning Fee: $80/-") in case that phrasing is ever used too.
+export function extractDollarNear(text, keyword) {
+  const before = text.match(new RegExp(`\\$\\s*(\\d+(?:\\.\\d+)?)\\s*(?:/-)?\\s*${keyword}`, "i"));
+  if (before) return before[1];
+  const after = text.match(new RegExp(`${keyword}[^\\d$]{0,20}\\$\\s*(\\d+(?:\\.\\d+)?)`, "i"));
+  return after ? after[1] : null;
+}
+
 export function parseWaQuote(text) {
   const f = parseTelegramTemplate(text);
   const packageMatch = text.match(/package\s+(\d+(?:\.\d+)?)\s*hours?\s*:\s*\$?\s*(\d+(?:\.\d+)?)\s*\/\s*hr/i);
@@ -104,8 +158,8 @@ export function parseWaQuote(text) {
     total: f["total"] || null,
     discount_percent: discountMatch ? discountMatch[1] : null,
     final_price: f["final price"] || null,
-    cleaning_fee: f["cleaning fee"] || null,
-    deposit_amount: f["deposit"] || f["security deposit"] || null,
+    cleaning_fee: f["cleaning fee"] || extractDollarNear(text, "cleaning"),
+    deposit_amount: f["deposit"] || f["security deposit"] || extractDollarNear(text, "deposit"),
   };
 }
 
@@ -120,23 +174,46 @@ export function parseWaParticulars(text) {
   };
 }
 
+// "Type Of Event" / "Event Type" in the real templates ask what KIND of party
+// it is (Birthday, Wedding, Hens Party, DnD, ...) — a free-text occasion, not
+// stageBookingForConfirm's Social/Corporate/Seminar pricing-engine selector
+// (pricing.js's EVENT_TYPES). Confirmed by cross-checking the real quote
+// template's own shape (usual rate × package rate × hours − discount%) against
+// pricing.js: that's the SOCIAL engine's exact structure — there's no
+// Corporate/Seminar variant of this WhatsApp quote template at all, and every
+// example the template itself gives (birthday/wedding/hens party/DnD) is a
+// Social occasion. So for THIS intake path specifically, the pricing-category
+// event_type is always "Social"; the actual occasion goes into `purpose`
+// (stageBookingForConfirm's free-text notes field) instead of being lost.
+// (2026-08-02, found against Kenneth's real templates — previously the raw
+// occasion value, e.g. "Birthday (e.g. birthday, wedding, hens party, DnD
+// etc.)" including the template's own instructional hint text, was fed
+// directly into the EVENT_TYPES.includes() check and would always fail it,
+// blocking every WA-template booking with a "couldn't recognize Event Type"
+// error.) The strict §5a template is untouched — it still sends its own real
+// Social/Corporate/Seminar choice through unchanged.
+function stripParenHint(raw) {
+  return String(raw || "").replace(/\s*\([^)]*\)\s*$/, "").trim();
+}
+
 // Maps the 3 accumulated groups into stageBookingForConfirm's normalized field
-// shape (worker.js). venue/purpose/"cleaning with" aren't captured by any of the
-// 3 real templates — left blank, which stageBookingForConfirm already treats as
-// sensible defaults (Whole Venue, no notes, cleaning billed with deposit).
+// shape (worker.js). venue/"cleaning with" aren't captured by any of the 3 real
+// templates — left blank, which stageBookingForConfirm already treats as
+// sensible defaults (Whole Venue, cleaning billed with deposit).
 export function waAccumulationToFields(acc) {
   const ed = acc.event_details || {};
   const q = acc.quote || {};
   const p = acc.particulars || {};
+  const occasion = stripParenHint(ed.event_type || p.event_type || "");
   return {
     name: p.name || "",
     "nric/uen": p.nric_last4 || "",
-    "event type": ed.event_type || p.event_type || "",
+    "event type": "Social",
     venue: "",
     "date of event": ed.date_of_event || "",
     "time start": ed.start_time || "",
     duration: ed.hours || "",
-    purpose: "",
+    purpose: occasion,
     rate: q.package_rate || "",
     discount: q.discount_percent || "",
     "cleaning fee": q.cleaning_fee || "",

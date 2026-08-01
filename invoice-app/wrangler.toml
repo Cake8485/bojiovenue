@@ -41,10 +41,12 @@ crons = ["0 1 * * *"]
 # ---------------------------------------------------------------------------
 [vars]
 # Public base URL of this Worker. Used to build client signing links.
-# Placeholder until the invoice.bojiovenue.com custom domain is attached
-# during deploy — until then, wrangler will print a real *.workers.dev URL
-# to use here for local/testing purposes.
-PUBLIC_BASE_URL = "https://invoice.bojiovenue.com"
+# Temporarily the real *.workers.dev URL (2026-08-02) — invoice.bojiovenue.com
+# is deferred, since that domain's Cloudflare zone lives under a different
+# account than this Worker is deployed to, and Kenneth doesn't want anything
+# touching that domain until he's ready to sort out account access himself.
+# Swap back once the custom domain is actually attached.
+PUBLIC_BASE_URL = "https://bojiovenue-invoice.cake8485.workers.dev"
 
 # Google Drive: ID of the PARENT folder that month folders (2026-07, ...)
 # get created under. You'll fill this during the OAuth setup step.

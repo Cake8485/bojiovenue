@@ -41,7 +41,7 @@ import { fileToDrive, ensureBookingFolder, ensureSubfolder, moveFolder, renameFo
 import { notifySigned, sendTelegram, answerCallbackQuery, sendTelegramDocument, getTelegramPhotoBytes, waLink } from "./notify.js";
 import { adminPage, signPage, addendumPage } from "./pages.js";
 import {
-  parseTelegramTemplate, parseFlexibleDate, parseLooseNumber,
+  parseTelegramTemplate, parseFlexibleDate, parseLooseNumber, parseFlexibleTime,
   detectWaTemplateType, parseWaEventDetails, parseWaQuote, parseWaParticulars, waAccumulationToFields, WA_GROUP_LABELS,
 } from "./parsing.js";
 
@@ -589,7 +589,17 @@ async function stageBookingForConfirm(env, chatId, fields) {
       return json({ ok: true });
     }
 
-    const start_time = fields["time start"] || null;
+    // Real WhatsApp-template value: "11.00am" (12h, period separator, am/pm
+    // suffix) — addHours() below only understands 24h "HH:MM" and silently
+    // returned null (blank end_time on the agreement, no crash, no warning)
+    // for anything else. parseFlexibleTime normalizes 12h/24h/period-or-colon
+    // input to "HH:MM"; unparseable input keeps the raw string as-is for
+    // display (so nothing is blanked) but end_time is skipped rather than fed
+    // garbage. Applies to both intake paths, not just WhatsApp — a strict-
+    // template "6pm" now works too, purely additive (existing "HH:MM" input
+    // parses identically to before).
+    const rawStartTime = fields["time start"] || null;
+    const start_time = rawStartTime ? (parseFlexibleTime(rawStartTime) || rawStartTime) : null;
     // 2026-08-02 bug report: "8hours" (a real WhatsApp-forward value) parsed as
     // Number("8hours") = NaN, which silently fell back to the 4-hour default —
     // a WRONG price with no warning. Blank/omitted still means "use 4h", same as
