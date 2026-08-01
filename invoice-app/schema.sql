@@ -173,19 +173,17 @@ CREATE INDEX IF NOT EXISTS idx_payments_invoice ON payments(invoice_id);
 CREATE INDEX IF NOT EXISTS idx_invoices_booking ON invoices(booking_date);
 CREATE INDEX IF NOT EXISTS idx_invoices_status  ON invoices(status);
 
--- Addendum 6 numbering seed — normally empty. Kenneth's real Zoho bookkeeping
--- already has receipt numbers issued directly against a given year (e.g. up to
--- ~2026039); inserting a row here (booking_year, start_seq) makes the FIRST
--- booking created in that Worker for that year come out as start_seq+1, so this
--- system's numbers never collide with pre-existing Zoho history. Once real rows
--- exist for a year, MAX(booking_seq) naturally takes over and this row is only
--- ever consulted as the floor. A placeholder (2026, 39) is seeded below pending
--- Kenneth's confirmed exact starting number.
+-- Addendum 6 numbering seed — normally empty. Kenneth's real Zoho highest is
+-- confirmed as RRC-2026040 (2026-08-01) — inserting a row here (booking_year,
+-- start_seq) makes the FIRST booking created in that Worker for that year come
+-- out as start_seq+1 = 2026041, so this system's numbers never collide with
+-- pre-existing Zoho history. Once real rows exist for a year, MAX(booking_seq)
+-- naturally takes over and this row is only ever consulted as the floor.
 CREATE TABLE IF NOT EXISTS booking_no_seed (
   booking_year INTEGER PRIMARY KEY,
   start_seq    INTEGER NOT NULL
 );
-INSERT OR IGNORE INTO booking_no_seed (booking_year, start_seq) VALUES (2026, 39);
+INSERT OR IGNORE INTO booking_no_seed (booking_year, start_seq) VALUES (2026, 40);
 
 -- Security Deposit Deductions (added Addendum 4, 2026-08-17) — Clause 8.3/8.4's
 -- "Security Deposit Deduction Addendum". A booking can have MORE than one (damage
