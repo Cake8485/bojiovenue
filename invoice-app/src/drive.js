@@ -1,8 +1,13 @@
 // Google Drive upload via the REST API — no SDK, just fetch().
 //
 // Auth model: a long-lived OAuth *refresh token* (yours) is stored as a Worker secret.
-// On each upload we exchange it for a short-lived access token. Files are owned by you
-// and land in the correct month folder under DRIVE_PARENT_FOLDER_ID.
+// On each upload we exchange it for a short-lived access token. Files are owned by you.
+//
+// Folder structure (rewritten Addendum 5, 2026-08-01): DRIVE_PARENT_FOLDER_ID ->
+// month folder (by event date, e.g. "2026-08") -> one subfolder per booking (e.g.
+// "INV-003_Nirmala_08Aug") -> every document for that booking lives inside. Two
+// levels of the SAME "find by name under this parent, or create" logic — see
+// ensureSubfolder below, used for both levels.
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const FILES_URL = "https://www.googleapis.com/drive/v3/files";
@@ -24,10 +29,11 @@ export async function getAccessToken(env) {
   return (await res.json()).access_token;
 }
 
-// Find (or create) the `2026-07`-style folder under the configured parent.
-export async function ensureMonthFolder(accessToken, parentId, monthName) {
+// Find (or create) a folder by name directly under `parentId`. Used for both the
+// month level and, nested inside a month folder, the per-booking level.
+export async function ensureSubfolder(accessToken, parentId, name) {
   const q =
-    `name='${monthName}' and '${parentId}' in parents and ` +
+    `name='${name.replace(/'/g, "\\'")}' and '${parentId}' in parents and ` +
     `mimeType='application/vnd.google-apps.folder' and trashed=false`;
   const res = await fetch(`${FILES_URL}?q=${encodeURIComponent(q)}&fields=files(id,name)`, {
     headers: { Authorization: `Bearer ${accessToken}` },
@@ -39,13 +45,59 @@ export async function ensureMonthFolder(accessToken, parentId, monthName) {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      name: monthName,
+      name,
       mimeType: "application/vnd.google-apps.folder",
       parents: [parentId],
     }),
   });
-  if (!create.ok) throw new Error("Create month folder failed: " + (await create.text()));
+  if (!create.ok) throw new Error("Create folder failed: " + (await create.text()));
   return (await create.json()).id;
+}
+
+// Back-compat name for the month-level call specifically (reads clearer at call
+// sites than the generic ensureSubfolder).
+export function ensureMonthFolder(accessToken, parentId, monthName) {
+  return ensureSubfolder(accessToken, parentId, monthName);
+}
+
+// Resolves (creating if needed) the full month -> booking folder path in one call,
+// returning the booking folder's ID plus the access token used (so a caller that
+// needs to do more Drive work right after — like moveFolder — doesn't have to
+// fetch a fresh one). Callers should cache the returned folder ID (see
+// db.setBookingFolderId) rather than calling this on every single file operation.
+export async function ensureBookingFolder(env, monthName, bookingFolderName) {
+  const accessToken = await getAccessToken(env);
+  const monthFolderId = await ensureSubfolder(accessToken, env.DRIVE_PARENT_FOLDER_ID, monthName);
+  const folderId = await ensureSubfolder(accessToken, monthFolderId, bookingFolderName);
+  return { accessToken, monthFolderId, folderId };
+}
+
+// Renames a folder in place (id and contents unchanged) — used by the postpone
+// command so a booking folder's {DDMon} suffix stays accurate even when the date
+// change doesn't cross a month boundary (no move needed, but the name is still stale).
+export async function renameFolder(env, folderId, newName) {
+  const accessToken = await getAccessToken(env);
+  const res = await fetch(`${FILES_URL}/${folderId}?fields=id,name`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ name: newName }),
+  });
+  if (!res.ok) throw new Error("Drive folder rename failed: " + (await res.text()));
+  return res.json();
+}
+
+// Moves a folder (and everything inside it) from one parent to another — used when
+// a booking is postponed into a different month. Drive files/folders reference
+// their parent(s) directly, so moving the booking folder automatically moves every
+// document already filed inside it; nothing else needs to change.
+export async function moveFolder(env, folderId, oldParentId, newParentId) {
+  const accessToken = await getAccessToken(env);
+  const res = await fetch(
+    `${FILES_URL}/${folderId}?addParents=${newParentId}&removeParents=${oldParentId}&fields=id,parents`,
+    { method: "PATCH", headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+  if (!res.ok) throw new Error("Drive folder move failed: " + (await res.text()));
+  return res.json();
 }
 
 async function findFileInFolder(accessToken, folderId, name) {
@@ -100,14 +152,14 @@ async function replaceMedia(accessToken, fileId, bytes, mimeType) {
   return res.json();
 }
 
-// Upload a file into the month folder. If a file with the same name already exists
-// (e.g. re-filing after a status change, or Kenneth re-sending a refund screenshot),
-// its contents are replaced in place so the filed document always reflects the
-// latest version — no duplicates. `mimeType` defaults to PDF since that's still
-// almost every caller; Addendum 4's refund-proof screenshots pass "image/jpeg".
-export async function fileToDrive(env, { monthName, filename, pdfBytes, mimeType }) {
+// Upload a file into an already-resolved folder (see ensureBookingFolder). If a
+// file with the same name already exists (e.g. re-filing after a status change, or
+// Kenneth re-sending a refund screenshot), its contents are replaced in place so
+// the filed document always reflects the latest version — no duplicates. `mimeType`
+// defaults to PDF since that's still almost every caller; refund-proof screenshots
+// pass "image/jpeg".
+export async function fileToDrive(env, { folderId, filename, pdfBytes, mimeType }) {
   const accessToken = await getAccessToken(env);
-  const folderId = await ensureMonthFolder(accessToken, env.DRIVE_PARENT_FOLDER_ID, monthName);
   const existing = await findFileInFolder(accessToken, folderId, filename);
   const type = mimeType || "application/pdf";
   return existing

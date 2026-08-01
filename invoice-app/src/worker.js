@@ -35,7 +35,7 @@ import { agreementHtml, buildAgreementPdf } from "./agreement.js";
 import { buildRentalReceiptPdf, buildDepositReceiptPdf } from "./receipts.js";
 import { buildDeductionAddendumPdf, deductionHtml } from "./deductions.js";
 import { payNowQrSvg, invoicePayNowPayload } from "./paynow.js";
-import { fileToDrive } from "./drive.js";
+import { fileToDrive, ensureBookingFolder, ensureSubfolder, moveFolder, renameFolder, getAccessToken } from "./drive.js";
 import { notifySigned, sendTelegram, answerCallbackQuery, sendTelegramDocument, getTelegramPhotoBytes } from "./notify.js";
 import { adminPage, signPage, addendumPage } from "./pages.js";
 
@@ -304,8 +304,9 @@ async function submitAcknowledgment(env, ctx, token, request) {
       const all = await db.listDeductionsForInvoice(env, ded.invoice_id);
       const index = all.findIndex((d) => d.id === ded.id) + 1;
       const bytes = await buildDeductionAddendumPdf(env, inv, fresh, priorTotal);
-      const filename = `${inv.invoice_no}_DeductionAddendum${all.length > 1 ? "_" + index : ""}.pdf`;
-      const filed = await fileToDrive(env, { monthName: monthOf(inv.booking_date), filename, pdfBytes: bytes });
+      const filename = docName(inv, `DeductionAddendum${all.length > 1 ? "_" + index : ""}`);
+      const folderId = await getBookingFolderId(env, inv);
+      const filed = await fileToDrive(env, { folderId, filename, pdfBytes: bytes });
       await db.setDeductionDriveFileId(env, ded.id, filed.id);
       await sendTelegram(env, env.TELEGRAM_CHAT_ID,
         `✅ ${inv.invoice_no}: deduction addendum acknowledged by ${fresh.acknowledger_name}.\n` +
@@ -327,20 +328,21 @@ async function submitAcknowledgment(env, ctx, token, request) {
 // `ok` carries both the Drive file id (for the DB) and webViewLink (for the Telegram
 // notification, so Kenneth can open the signed PDF straight from the message).
 async function fileAllDocuments(env, inv, payments) {
-  const month = monthOf(inv.booking_date);
   const ok = { agreement: null, bookingInvoice: null, depositInvoice: null };
   let error = null;
   try {
+    const folderId = await getBookingFolderId(env, inv);
+
     const agreementBytes = await buildAgreementPdf(env, inv);
-    const agreementFiled = await fileToDrive(env, { monthName: month, filename: docName(inv, "Agreement"), pdfBytes: agreementBytes });
+    const agreementFiled = await fileToDrive(env, { folderId, filename: docName(inv, "Agreement_Signed"), pdfBytes: agreementBytes });
     ok.agreement = agreementFiled;
 
     const bookingBytes = await buildBookingInvoicePdf(env, inv, payments);
-    const bookingFiled = await fileToDrive(env, { monthName: month, filename: docName(inv, "BookingInvoice"), pdfBytes: bookingBytes });
+    const bookingFiled = await fileToDrive(env, { folderId, filename: docName(inv, "Invoice1_Rental"), pdfBytes: bookingBytes });
     ok.bookingInvoice = bookingFiled;
 
     const depositBytes = await buildDepositInvoicePdf(env, inv, payments);
-    const depositFiled = await fileToDrive(env, { monthName: month, filename: docName(inv, "DepositInvoice"), pdfBytes: depositBytes });
+    const depositFiled = await fileToDrive(env, { folderId, filename: docName(inv, "Invoice2_Deposit"), pdfBytes: depositBytes });
     ok.depositInvoice = depositFiled;
 
     await db.setDriveFileIds(env, inv.id, { agreement: ok.agreement?.id, bookingInvoice: ok.bookingInvoice?.id, depositInvoice: ok.depositInvoice?.id });
@@ -406,7 +408,9 @@ const TELEGRAM_TEMPLATE_HELP =
   `After the event: "INV-003 refunded" (+ forward your bank transfer screenshot with ` +
   `the invoice number as its caption, to file it as proof) for a clean payout, or ` +
   `"INV-003 deduct 150 reason: stained sofa" to issue a Security Deposit Deduction ` +
-  `Addendum first — you'll get an acknowledgment link to send the client yourself.`;
+  `Addendum first — you'll get an acknowledgment link to send the client yourself.\n\n` +
+  `"INV-003 postpone to 2026-09-20" moves the booking date (and its Drive folder, ` +
+  `if the month changed) — the price stays as originally agreed.`;
 
 async function telegramWebhook(env, ctx, request) {
   const update = await request.json().catch(() => ({}));
@@ -457,8 +461,9 @@ async function telegramRefundProofPhoto(env, chatId, msg) {
   try {
     const largest = msg.photo[msg.photo.length - 1]; // Telegram lists photo sizes smallest-first
     const bytes = await getTelegramPhotoBytes(env, largest.file_id);
-    const filename = `${inv.invoice_no}_RefundProof.jpg`;
-    const filed = await fileToDrive(env, { monthName: monthOf(inv.booking_date), filename, pdfBytes: bytes, mimeType: "image/jpeg" });
+    const filename = docName(inv, "RefundProof", "jpg");
+    const folderId = await getBookingFolderId(env, inv);
+    const filed = await fileToDrive(env, { folderId, filename, pdfBytes: bytes, mimeType: "image/jpeg" });
     await db.setRefundProofFileId(env, inv.id, filed.id);
     await sendTelegram(env, chatId,
       `✅ Refund proof filed for ${invoiceNo}: ${filed.webViewLink}` +
@@ -580,6 +585,11 @@ const STATUS_PHRASES = [
 // since it carries a dynamic amount + free-text reason, not a fixed status value.
 const DEDUCT_RE = /^deduct\s+(\d+(?:\.\d+)?)\s+reason:\s*(.+)$/i;
 
+// "INV-XXX postpone to 2026-09-20" (or "postpone 2026-09-20") — Addendum 5. Price
+// stays locked at whatever was originally agreed; this only moves the date and, if
+// the month changed, the Drive folder.
+const POSTPONE_RE = /^postpone\s+(?:to\s+)?(\d{4}-\d{2}-\d{2})$/i;
+
 // "INV-XXX stage" / "INV-XXX status" — a read-only check, handled before the
 // mutating STATUS_PHRASES so it can never be misread as a payment update.
 // `deductions`: pre-fetched by the caller (see telegramStatusUpdate) so this stays
@@ -623,11 +633,14 @@ async function telegramStatusUpdate(env, chatId, invoiceNo, statusText) {
   const deductMatch = statusText.trim().match(DEDUCT_RE);
   if (deductMatch) return telegramDeductCommand(env, chatId, inv, Number(deductMatch[1]), deductMatch[2].trim());
 
+  const postponeMatch = statusText.trim().match(POSTPONE_RE);
+  if (postponeMatch) return telegramPostponeCommand(env, chatId, inv, postponeMatch[1]);
+
   const match = STATUS_PHRASES.find((p) => p.re.test(statusText));
   if (!match) {
     await sendTelegram(env, chatId,
       `⚠️ Didn't recognize "${statusText}" for ${invoiceNo}. Try: "rental paid", "deposit paid", "cleaning paid", "deposit refunded", "partially paid", ` +
-      `"deduct 150 reason: ...", or "stage".`);
+      `"deduct 150 reason: ...", "postpone to YYYY-MM-DD", or "stage".`);
     return json({ ok: true });
   }
 
@@ -672,14 +685,15 @@ async function telegramStatusUpdate(env, chatId, invoiceNo, statusText) {
   if (updated.status === "signed") {
     const payments = await db.getPayments(env, updated.id);
     try {
+      const folderId = await getBookingFolderId(env, updated);
       if (match.refile === "deposit") {
         const bytes = await buildDepositInvoicePdf(env, updated, payments);
-        const filed = await fileToDrive(env, { monthName: monthOf(updated.booking_date), filename: docName(updated, "DepositInvoice"), pdfBytes: bytes });
+        const filed = await fileToDrive(env, { folderId, filename: docName(updated, "Invoice2_Deposit"), pdfBytes: bytes });
         await db.setDriveFileIds(env, updated.id, { depositInvoice: filed.id });
         refileNote = `\nDeposit Invoice refiled: ${filed.webViewLink}`;
       } else {
         const bytes = await buildBookingInvoicePdf(env, updated, payments);
-        const filed = await fileToDrive(env, { monthName: monthOf(updated.booking_date), filename: docName(updated, "BookingInvoice"), pdfBytes: bytes });
+        const filed = await fileToDrive(env, { folderId, filename: docName(updated, "Invoice1_Rental"), pdfBytes: bytes });
         await db.setDriveFileIds(env, updated.id, { bookingInvoice: filed.id });
         refileNote = `\nBooking Invoice refiled: ${filed.webViewLink}`;
       }
@@ -714,6 +728,52 @@ async function telegramDeductCommand(env, chatId, inv, amount, reason) {
   return json({ ok: true });
 }
 
+// "INV-XXX postpone to 2026-09-20" — updates the booking date and, if the event
+// moved into a different month, moves the existing Drive folder to match. Price
+// stays exactly as originally agreed (Kenneth's choice) — this is a scheduling
+// change, not a renegotiation. Deliberately does NOT touch void bookings, and does
+// NOT regenerate any already-filed PDFs (they'll still show the original date until
+// re-filed some other way) — flagged clearly in the reply rather than silently
+// leaving stale documents without saying so.
+async function telegramPostponeCommand(env, chatId, inv, newDate) {
+  if (inv.status === "void") {
+    await sendTelegram(env, chatId, `⚠️ ${inv.invoice_no} is void — can't postpone a cancelled booking.`);
+    return json({ ok: true });
+  }
+  const oldDate = inv.booking_date;
+  const oldMonth = monthOf(oldDate);
+  const newMonth = monthOf(newDate);
+
+  try {
+    await db.updateBookingDate(env, inv.id, newDate);
+
+    // Rename ALWAYS runs (the {DDMon} suffix goes stale even for a same-month date
+    // change, e.g. 08Aug -> 22Aug); the move only runs when the month itself changed.
+    let moveNote = "";
+    if (inv.drive_booking_folder_id) {
+      const newFolderName = bookingFolderName({ ...inv, booking_date: newDate });
+      await renameFolder(env, inv.drive_booking_folder_id, newFolderName);
+      if (oldMonth !== newMonth) {
+        const accessToken = await getAccessToken(env);
+        const oldMonthFolderId = await ensureSubfolder(accessToken, env.DRIVE_PARENT_FOLDER_ID, oldMonth);
+        const newMonthFolderId = await ensureSubfolder(accessToken, env.DRIVE_PARENT_FOLDER_ID, newMonth);
+        await moveFolder(env, inv.drive_booking_folder_id, oldMonthFolderId, newMonthFolderId);
+        moveNote = `\nDrive folder moved: ${oldMonth} → ${newMonth} (renamed to ${newFolderName})`;
+      } else {
+        moveNote = `\nDrive folder renamed to ${newFolderName}`;
+      }
+    }
+
+    await sendTelegram(env, chatId,
+      `📅 ${inv.invoice_no}: postponed from ${oldDate} to ${newDate}. Price stays as originally agreed ($${Number(inv.grand_total).toFixed(2)}).${moveNote}\n\n` +
+      `⚠️ Note: any already-filed Agreement/Invoice/Receipt PDFs still show the original date (${oldDate}) — only the booking record and Drive folder location have moved. Let me know if you also want those documents regenerated with the new date.`);
+  } catch (e) {
+    console.log("[telegram] postpone failed", e);
+    await sendTelegram(env, chatId, `⚠️ Something went wrong postponing: ${String((e && e.message) || e)}`);
+  }
+  return json({ ok: true });
+}
+
 // Builds + files the rental or deposit payment receipt, records the payment-event
 // timestamp (once only — re-applying the same command later won't move it), and
 // sends the PDF straight to Kenneth's Telegram so he can forward it on WhatsApp.
@@ -724,8 +784,9 @@ async function generateAndSendReceipt(env, chatId, inv, kind) {
     const fresh = await db.getInvoiceByNo(env, inv.invoice_no); // pick up the timestamp just set
 
     const bytes = kind === "rental" ? await buildRentalReceiptPdf(env, fresh) : await buildDepositReceiptPdf(env, fresh);
-    const filename = docName(fresh, kind === "rental" ? "RentalReceipt" : "DepositReceipt");
-    const filed = await fileToDrive(env, { monthName: monthOf(fresh.booking_date), filename, pdfBytes: bytes });
+    const filename = docName(fresh, kind === "rental" ? "Receipt1_Rental" : "Receipt2_Deposit");
+    const folderId = await getBookingFolderId(env, fresh);
+    const filed = await fileToDrive(env, { folderId, filename, pdfBytes: bytes });
     await db.setReceiptFileIds(env, fresh.id, kind === "rental" ? { rentalReceipt: filed.id } : { depositReceipt: filed.id });
     await sendTelegramDocument(env, chatId, filename, bytes, `Receipt for ${fresh.invoice_no} — forward to the client if needed.`);
     return `\nReceipt generated and filed: ${filed.webViewLink}`;
@@ -973,7 +1034,31 @@ function monthOf(dateStr) {
 function round2(n) {
   return Math.round(n * 100) / 100;
 }
-function docName(inv, kind) {
+// File names simplified in Addendum 5 — no client/date suffix needed since every
+// document now lives inside a folder that's already unique to this one booking.
+function docName(inv, kind, ext) {
+  return `${inv.invoice_no}_${kind}.${ext || "pdf"}`;
+}
+
+const DD_MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function ddMon(dateStr) {
+  const d = new Date(String(dateStr).slice(0, 10) + "T00:00:00");
+  return String(d.getDate()).padStart(2, "0") + DD_MON[d.getMonth()];
+}
+function bookingFolderName(inv) {
   const clean = String(inv.client_name || "client").replace(/[^A-Za-z0-9]+/g, "");
-  return `${inv.invoice_no}_${kind}_${clean}_${inv.booking_date}.pdf`;
+  return `${inv.invoice_no}_${clean}_${ddMon(inv.booking_date)}`;
+}
+
+// Resolves the Drive folder ID for this booking's documents, creating the
+// month -> booking folder path on first use and caching the result on the invoice
+// row so every later call (refiling, receipts, deductions, refund proof) is a
+// single field read instead of a Drive search. Always re-derives the month from
+// the invoice's CURRENT booking_date, so if a postpone moved the folder already,
+// this naturally resolves to wherever it now lives.
+async function getBookingFolderId(env, inv) {
+  if (inv.drive_booking_folder_id) return inv.drive_booking_folder_id;
+  const { folderId } = await ensureBookingFolder(env, monthOf(inv.booking_date), bookingFolderName(inv));
+  await db.setBookingFolderId(env, inv.id, folderId);
+  return folderId;
 }

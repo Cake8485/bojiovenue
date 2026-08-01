@@ -150,6 +150,23 @@ export async function setRefundProofFileId(env, id, fileId) {
   ).bind(fileId, id).run();
 }
 
+// Booking folder id (Addendum 5) — cached after first creation so repeated filing
+// doesn't re-search Drive by name every time.
+export async function setBookingFolderId(env, id, folderId) {
+  await env.DB.prepare(
+    `UPDATE invoices SET drive_booking_folder_id = ?, updated_at = datetime('now') WHERE id = ?`
+  ).bind(folderId, id).run();
+}
+
+// Postponement (Addendum 5) — price stays locked, this only moves the date. The
+// caller (worker.js) is responsible for also moving the Drive folder if the month
+// changed.
+export async function updateBookingDate(env, id, newDate) {
+  await env.DB.prepare(
+    `UPDATE invoices SET booking_date = ?, updated_at = datetime('now') WHERE id = ?`
+  ).bind(newDate, id).run();
+}
+
 // ---------------------------------------------------------------------------
 // Security deposit deductions (Addendum 4) — see schema.sql for why this is its
 // own table rather than columns on invoices (a booking can have more than one).

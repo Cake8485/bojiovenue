@@ -97,6 +97,13 @@ CREATE TABLE IF NOT EXISTS invoices (
   signer_name          TEXT,
   signed_at            TEXT,
 
+  -- Drive folder structure (rewritten Addendum 5, 2026-08-01): month folder (by
+  -- event date) -> one subfolder per booking ({invoice_no}_{ClientName}_{DDMon}) ->
+  -- every document for this booking lives inside. Stored once the folder is first
+  -- created so repeated filing (and the postpone command's folder move) hit this ID
+  -- directly instead of re-searching Drive by name every time.
+  drive_booking_folder_id       TEXT,
+
   -- Three separate PDFs get filed to Drive once the agreement is signed (not one combined doc)
   drive_agreement_file_id       TEXT,
   drive_booking_invoice_file_id TEXT,
