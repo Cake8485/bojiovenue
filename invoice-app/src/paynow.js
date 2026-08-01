@@ -104,7 +104,7 @@ export function invoicePayNowPayload(env, inv, amount, kind) {
   return buildPayNowPayload({
     uen: env.BUSINESS_UEN,
     amount,
-    reference: `${inv.invoice_no} ${inv.client_name} ${kind}`,
+    reference: `${inv.booking_no} ${inv.client_name} ${kind}`,
     merchantName: env.BUSINESS_ENTITY,
   });
 }

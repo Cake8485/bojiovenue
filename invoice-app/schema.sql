@@ -1,5 +1,7 @@
 -- BojioVenue D1 schema.
--- One document, status-driven (invoice + receipt in one). See README for rationale.
+-- Rental (INV bill + RRC receipt, two documents) and Security Deposit (SD, one
+-- evolving document re-filed in place as its Balance Due changes) — see Addendum 6
+-- comment on the invoices table below for the numbering/document-identity model.
 
 -- Promo presets (added 2026-08-03). Defined once, auto-applied to new bookings
 -- whose booking_date falls within [valid_from, valid_to] and where active=1.
@@ -23,10 +25,18 @@ CREATE TABLE IF NOT EXISTS promos (
   created_at                TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Addendum 6 (2026-08-24) numbering: one BOOKING NUMBER per booking, gapless WITHIN
+-- its issue year — {booking_year}{booking_seq, zero-padded to 3}, e.g. '2026036'.
+-- Replaces the old flat 'INV-001' sequence. Every document derives its own display
+-- number by prefixing this: AGR-/INV-/RRC-/SD-/DDA-{booking_no} (computed at
+-- render/filename time in worker.js — not stored per-document). See
+-- booking_no_seed below for how the sequence is seeded above Kenneth's pre-existing
+-- Zoho receipt numbers.
 CREATE TABLE IF NOT EXISTS invoices (
   id                   INTEGER PRIMARY KEY AUTOINCREMENT,
-  seq                  INTEGER NOT NULL UNIQUE,          -- gapless sequence: 1, 2, 3, ...
-  invoice_no           TEXT    NOT NULL UNIQUE,          -- display form, e.g. 'INV-001'
+  booking_year         INTEGER NOT NULL,                 -- year the booking number was issued (creation year, NOT event year)
+  booking_seq          INTEGER NOT NULL,                 -- gapless sequence within booking_year: 1, 2, 3, ...
+  booking_no           TEXT    NOT NULL UNIQUE,          -- display form, e.g. '2026036' (see comment above)
   token                TEXT    NOT NULL UNIQUE,          -- unguessable signing-link token
   status               TEXT    NOT NULL DEFAULT 'issued',-- issued | signed | void
 
@@ -63,6 +73,10 @@ CREATE TABLE IF NOT EXISTS invoices (
   rental_subtotal      REAL,                              -- Social: hourly_rate * hours, BEFORE discount_percent. Corporate: same as rental_total (no percent layer).
   discount_percent     REAL    NOT NULL DEFAULT 0,        -- Social only: % off rental_subtotal, manual or promo-suggested
   cleaning_fee         REAL    NOT NULL DEFAULT 0,
+  -- Addendum 6: which payment the cleaning fee is billed/receipted with — chosen per
+  -- booking at quote time, defaults to 'deposit' (Kenneth's stated default). Governs
+  -- which money document (INV/RRC vs SD) shows the cleaning fee line item.
+  cleaning_fee_with    TEXT    NOT NULL DEFAULT 'deposit', -- 'rental' | 'deposit'
   deposit_amount       REAL    NOT NULL DEFAULT 0,        -- SEPARATE refundable security deposit — never netted into grand_total or balance owed
   pet_fee              REAL    NOT NULL DEFAULT 0,        -- optional $100 add-on, checkbox on the invoice form
   discount             REAL    NOT NULL DEFAULT 0,        -- Social: dollar amount discount_percent works out to (informational). Corporate: flat $ off (parsed from % or $ input) subtracted at grand_total.
@@ -98,29 +112,31 @@ CREATE TABLE IF NOT EXISTS invoices (
   signed_at            TEXT,
 
   -- Drive folder structure (rewritten Addendum 5, 2026-08-01): month folder (by
-  -- event date) -> one subfolder per booking ({invoice_no}_{ClientName}_{DDMon}) ->
+  -- event date) -> one subfolder per booking ({booking_no}_{ClientName}_{DDMon}) ->
   -- every document for this booking lives inside. Stored once the folder is first
   -- created so repeated filing (and the postpone command's folder move) hit this ID
   -- directly instead of re-searching Drive by name every time.
   drive_booking_folder_id       TEXT,
 
-  -- Three separate PDFs get filed to Drive once the agreement is signed (not one combined doc)
-  drive_agreement_file_id       TEXT,
-  drive_booking_invoice_file_id TEXT,
-  drive_deposit_invoice_file_id TEXT,
-  -- Receipts (added Addendum 3) — distinct documents from the invoices above, filed
-  -- only once the corresponding payment is actually confirmed via Telegram, not at
-  -- signing time. Invoice = bill (what's owed); Receipt = proof of payment received.
-  drive_rental_receipt_file_id  TEXT,
-  drive_deposit_receipt_file_id TEXT,
+  -- Money-document identity (Addendum 6, 2026-08-24): AGR (agreement) + INV (rental
+  -- bill, frozen as issued) + RRC (rental receipt, filed fresh once rental is paid)
+  -- + SD (security deposit doc — ONE evolving document, re-filed IN PLACE as its
+  -- Balance Due changes; unlike rental it never gets a separate "receipt" file,
+  -- matching Kenneth's real Zoho SD-xxxxx samples which stay titled "Deposit
+  -- Invoice" even once fully paid). Cleaning fee appears on whichever of INV/RRC or
+  -- SD matches cleaning_fee_with above.
+  drive_agreement_file_id       TEXT, -- AGR
+  drive_rental_invoice_file_id  TEXT, -- INV (frozen bill, filed at signing)
+  drive_rental_receipt_file_id  TEXT, -- RRC (filed once rental fee is paid)
+  drive_security_deposit_file_id TEXT, -- SD (evolving — re-filed in place as payment status changes)
 
   -- Payment-event timestamps (added Addendum 3) — each is set once, the first time
   -- its status command is applied; re-applying the same command does not move them.
   -- Needed both for the receipts (payment date) and for stage tracking / reminders.
   sent_at                    TEXT,  -- when Kenneth tapped "Send signing link" in Telegram
-  rental_paid_at             TEXT,  -- when "INV-XXX rental paid" was first applied
-  deposit_paid_at            TEXT,  -- when "INV-XXX deposit paid" was first applied
-  deposit_refunded_at        TEXT,  -- when "INV-XXX deposit refunded" was first applied
+  rental_paid_at             TEXT,  -- when "<booking> rental paid" was first applied
+  deposit_paid_at            TEXT,  -- when "<booking> deposit paid" was first applied
+  deposit_refunded_at        TEXT,  -- when "<booking> deposit refunded" was first applied
   -- One-time markers so the daily cron reminder doesn't re-nag about the same
   -- booking every day once the threshold is crossed.
   unsigned_reminder_sent_at  TEXT,
@@ -144,12 +160,32 @@ CREATE TABLE IF NOT EXISTS payments (
   kind         TEXT    NOT NULL,          -- deposit | balance | cleaning_fee | refund | other
   paid_on      TEXT    NOT NULL,          -- YYYY-MM-DD
   note         TEXT,
+  -- Addendum 6: captured when Kenneth marks a payment with trailing payment details,
+  -- e.g. "RRC-2026036 paid paynow ocbc ref 5358482" — shown in the Notes block of
+  -- the corresponding money document. All optional; a bare "...paid" still works.
+  payment_mode TEXT,          -- e.g. Paynow | Cash | Bank Transfer | Cheque | PayLah
+  bank         TEXT,          -- e.g. OCBC | DBS | UOB
+  reference    TEXT,          -- transaction/reference number
   created_at   TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_payments_invoice ON payments(invoice_id);
 CREATE INDEX IF NOT EXISTS idx_invoices_booking ON invoices(booking_date);
 CREATE INDEX IF NOT EXISTS idx_invoices_status  ON invoices(status);
+
+-- Addendum 6 numbering seed — normally empty. Kenneth's real Zoho bookkeeping
+-- already has receipt numbers issued directly against a given year (e.g. up to
+-- ~2026039); inserting a row here (booking_year, start_seq) makes the FIRST
+-- booking created in that Worker for that year come out as start_seq+1, so this
+-- system's numbers never collide with pre-existing Zoho history. Once real rows
+-- exist for a year, MAX(booking_seq) naturally takes over and this row is only
+-- ever consulted as the floor. A placeholder (2026, 39) is seeded below pending
+-- Kenneth's confirmed exact starting number.
+CREATE TABLE IF NOT EXISTS booking_no_seed (
+  booking_year INTEGER PRIMARY KEY,
+  start_seq    INTEGER NOT NULL
+);
+INSERT OR IGNORE INTO booking_no_seed (booking_year, start_seq) VALUES (2026, 39);
 
 -- Security Deposit Deductions (added Addendum 4, 2026-08-17) — Clause 8.3/8.4's
 -- "Security Deposit Deduction Addendum". A booking can have MORE than one (damage
@@ -159,15 +195,15 @@ CREATE INDEX IF NOT EXISTS idx_invoices_status  ON invoices(status);
 -- and its "balance refundable" line accounts for any earlier deductions on the same
 -- booking (see deductions.js's running-balance calc), not just itself in isolation.
 -- After acknowledgment, the balance is due within 3 working days (Clause 8.4); the
--- actual payout still goes through the SAME "INV-XXX refunded" + screenshot flow as
--- a plain no-deduction refund — this table only tracks the deduction paperwork, not
--- the payout itself (that's deposit_status/deposit_refunded_at on invoices).
+-- actual payout still goes through the SAME "<booking> refunded" + screenshot flow
+-- as a plain no-deduction refund — this table only tracks the deduction paperwork,
+-- not the payout itself (that's deposit_status/deposit_refunded_at on invoices).
 CREATE TABLE IF NOT EXISTS deductions (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,
   invoice_id        INTEGER NOT NULL REFERENCES invoices(id),
   token             TEXT    NOT NULL UNIQUE,          -- unguessable acknowledgment-link token
   amount            REAL    NOT NULL,
-  reason             TEXT    NOT NULL,                 -- breach nature / remarks, from "INV-XXX deduct 150 reason: ..."
+  reason             TEXT    NOT NULL,                 -- breach nature / remarks, from "<booking> deduct 150 reason: ..."
   status             TEXT    NOT NULL DEFAULT 'pending', -- pending | acknowledged
   signature_png      TEXT,                              -- captured the same way as the Agreement's signature
   acknowledger_name  TEXT,

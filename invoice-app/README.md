@@ -16,19 +16,21 @@ Runs on a Cloudflare Worker with a D1 database. **$0 recurring cost.**
 
 ```
 You                                Cloudflare Worker                    Google
-  /admin  ──create invoice──▶   assigns INV-###, random token
+  /admin  ──create invoice──▶   assigns a booking number (e.g. 2026036), random token
   OR message the Telegram bot   store in D1 ─────────────────────────────────
   a fixed template ───────────▶
 
 Client browser
   /sign/:token ──review──▶      returns agreement + booking data
   sign on canvas ──submit──▶    build 3 PDFs (pdf-lib):
-                                  Agreement, Booking Invoice, Deposit Invoice
-                               upload all 3 ───────────────────▶  Drive /2026-07/
+                                  AGR (signed Agreement), INV (Rental Invoice), SD (Security Deposit)
+                               upload all 3 ───────────────────▶  Drive /2026-07/2026036_ClientName_12Jul/
                                notify ─────────────────────────▶  Telegram (you)
 ```
+A 4th document, RRC (rental receipt), is generated the first time rental payment is
+confirmed — see "Numbering & documents" below.
 
-**Why a database (D1)?** The "no-gaps INV-001, INV-002…" requirement can't be done safely
+**Why a database (D1)?** The "no-gaps booking number" requirement can't be done safely
 with a plain counter on stateless Workers. D1 (Cloudflare's built-in SQLite, free tier)
 gives an atomic gapless sequence *and* stores invoices + the payment log. See
 `src/db.js` for the gapless-numbering trick.
@@ -44,17 +46,23 @@ gives an atomic gapless sequence *and* stores invoices + the payment log. See
 ### File map
 ```
 wrangler.toml        Worker + D1 config, non-secret vars
-schema.sql           D1 tables (invoices, payments)
+schema.sql           D1 tables (invoices, payments, deductions, promos, pending_bookings, booking_no_seed)
 package.json         scripts + deps
 .dev.vars.example    template for local secrets  (copy to .dev.vars)
-src/worker.js        router + request handlers
-src/db.js            all SQL (incl. gapless numbering)
+src/worker.js        router + request handlers (this is most of the app's logic)
+src/db.js            all SQL (incl. gapless per-year booking-number numbering)
 src/pricing.js       venue pricing rules  ⚠ has flagged open questions
-src/pdf.js           server-side PDF builder (pdf-lib)
-src/drive.js         Google Drive upload (OAuth refresh + multipart)
-src/notify.js        Telegram notifications (outbound) + reply helper (inbound bot replies)
-src/pages.js         admin UI + client signing page (shows the Agreement)
 src/agreement.js     Agreement content (2 templates, picked by venue_space) + PDF builder
+src/deductions.js    Security Deposit Deduction Addendum content + PDF builder
+src/branding.js      shared PDF primitives for the Agreement/Deduction Addendum identity (blue/yellow/purple)
+src/pdf.js           Rental Invoice (INV) + Security Deposit doc (SD) builders — the "money document" identity
+src/receipts.js      Rental Receipt (RRC) builder — shares content logic with pdf.js
+src/brandingMoney.js shared PDF primitives for the money-document identity (lavender/purple, Zoho-matched)
+src/paynow.js         PayNow SGQR payload + QR rendering (SVG + pdf-lib vector)
+src/drive.js          Google Drive upload (OAuth refresh + multipart) + folder management
+src/notify.js         Telegram notifications (outbound) + reply helper (inbound bot replies)
+src/pages.js          admin UI + client signing page + deduction acknowledgment page
+src/assets.js         bundled binary assets (fonts, logo, mascot watermark)
 ```
 
 ### Creating a booking via Telegram
@@ -71,15 +79,23 @@ Date of Event: 2026-08-15
 Time Start: 14:00
 Duration: 8
 Purpose: Birthday party
-Other: 10% discount
+Rate: 150
+Discount: 10
+Cleaning With: Deposit
+Other: 
 ```
 
 - **Event Type**: Social, Corporate, or Seminar. **Venue**: Whole Venue or Main Hall Only.
 - **Date must be YYYY-MM-DD** — any other format is rejected with an error, on purpose
   (ambiguous dates like 08/09 are a classic source of wrong invoices).
-- **Other** is optional (blank = no discount). Recognized: `10% off`, `$50 off`, `-$30`.
-  Anything it can't confidently parse is left at $0 and saved as a note for you to fix
-  in admin — it will never silently apply a wrong discount to a real invoice.
+- **Rate**/**Discount** (Social only): package $/hr rate and a plain discount % — blank
+  Rate = usual weekday/weekend rate, blank Discount = none (a promo may suggest both).
+- **Cleaning With**: `Rental` or `Deposit` — which payment the cleaning fee is billed
+  with (blank defaults to Deposit).
+- **Other** (Corporate/Seminar only) is a free-text discount, optional (blank = no
+  discount). Recognized: `10% off`, `$50 off`, `-$30`. Anything it can't confidently
+  parse is left at $0 and saved as a note for you to fix in admin — it will never
+  silently apply a wrong discount to a real invoice.
 - The bot replies with the computed price and a signing link to forward to the client
   (e.g. via WhatsApp).
 - **Registering the webhook** (one-time, after deploying): `setWebhook` must be called
@@ -131,17 +147,39 @@ because they involve clicking through Google's console and Telegram; we'll do th
 | Topic | Decision |
 |---|---|
 | Google account | Personal gmail → OAuth **published to Production** (avoids 7-day token death) |
-| Drive filing | One folder per month `YYYY-MM`, auto-created, based on **booking (event) date** |
-| File naming | `INV-001_ClientName_2026-07-12.pdf` |
+| Drive filing | Month folder `YYYY-MM` → one subfolder per booking `{booking_no}_{ClientName}_{DDMon}`, both auto-created, based on **booking (event) date** |
+| File naming | Just the document's own number: `AGR-2026036.pdf`, `INV-2026036.pdf`, `RRC-2026036.pdf`, `SD-2026036.pdf`, `DDA-2026036.pdf` (the folder already carries client/date context) |
 | Client info | Fresh entry each time (no stored customer list) |
-| Payments | Dated payment **log** + three status fields (rental, cleaning fee, deposit) |
-| Numbering | Gapless `INV-###`, assigned at "issue"; cancellations → **Void** record, number kept |
+| Payments | Dated payment **log** (with optional mode/bank/reference) + three status fields (rental, cleaning fee, deposit) |
+| Numbering | One gapless **booking number** per booking, `{year}{seq, zero-padded 3}` e.g. `2026036`, year-scoped and reset each year; cancellations → **Void** record, number kept. Every document derives its display number by prefixing this — see "Numbering & documents" below. |
 | Notification | Telegram (swappable to email later) |
 | PDF | Built **server-side** (tamper-proof) |
 | Signing link | Unguessable random token per invoice |
 | Deposit | **Separate refundable security deposit** — never netted against the rental balance owed |
 | Pricing engine | **event_type picks the engine** — Social vs Corporate/Seminar price completely differently. See Pricing below. |
-| Documents | Client signs the **Agreement** (not a bare invoice). Signing generates **3 separate PDFs**: signed Agreement, Booking Invoice (rental+cleaning), Deposit Invoice (deposit only) |
+| Documents | Client signs the **Agreement** (not a bare invoice). Two visual identities: Agreement + Deduction Addendum (blue/yellow/purple) vs money documents — Rental Invoice, Rental Receipt, Security Deposit doc (lavender/purple, Zoho-matched). See "Numbering & documents" below. |
+
+### Numbering & documents (Addendum 6)
+
+One **booking number** per booking (`invoices.booking_no`, e.g. `2026036`) is assigned
+gapless-per-year on creation. Every document derives its own display number by
+prefixing it — computed at render/filename time, never stored separately:
+
+| Prefix | Document | Lifecycle |
+|---|---|---|
+| `AGR` | Agreement (signed) | Filed once at signing, frozen |
+| `INV` | Rental Invoice (bill) | Filed at signing; refiled in place if rental-side status changes before it's paid |
+| `RRC` | Rental Receipt | Filed **once**, the first time rental payment is confirmed |
+| `SD` | Security Deposit doc | Filed at signing (unpaid) and **refiled in place** (same file) as deposit/cleaning-fee status changes — no separate "receipt" ever exists for this side |
+| `DDA` | Deduction Addendum | Filed once acknowledged; `-2`, `-3`… suffix if a booking has more than one |
+
+The cleaning fee is billed on whichever of INV/RRC or SD matches that booking's
+`cleaning_fee_with` ('rental' or 'deposit', default 'deposit') — set via the Telegram
+template's `Cleaning With:` field or the admin form.
+
+Telegram status commands accept the bare booking number ("2026036 rental paid") or any
+prefixed document number ("RRC-2026036 paid paynow ocbc ref 123") — whichever you're
+looking at — see `BOOKING_REF_RE` in `src/worker.js`.
 | Agreement template | Picked by **venue_space**: Whole Venue → general/Novan Management agreement; Main Hall Only → Seminar/Training Room agreement |
 | Booking creation | Via `/admin`, **or** by messaging the Telegram bot a fixed template (restricted to Kenneth's chat_id only) |
 | Discounts | Optional free-text field ("10% off", "$50 off"), parsed to a flat $ amount; unparseable text is never silently applied |

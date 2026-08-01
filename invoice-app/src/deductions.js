@@ -19,7 +19,7 @@ const money = (n) => "$" + Number(n || 0).toFixed(2);
 function deductionContent(env, invoice, deduction, priorDeductionsTotal) {
   const balanceAfter = Math.max(0, Number(invoice.deposit_amount || 0) - Number(priorDeductionsTotal || 0) - Number(deduction.amount || 0));
   return [
-    { newCard: true, p: `Security Deposit Deduction Addendum, issued under Clause 8.3 of the signed Agreement for booking ${invoice.invoice_no}.` },
+    { newCard: true, p: `Security Deposit Deduction Addendum, issued under Clause 8.3 of the signed Agreement for booking ${invoice.booking_no}.` },
     { p: `Between: ${env.BUSINESS_ENTITY || "Novan Management"} (trading as ${env.BUSINESS_NAME || "BojioVenue"}) and ${invoice.client_name} (the "Client").` },
     { p: `Event Date: ${invoice.booking_date}` },
 

@@ -1,12 +1,15 @@
 // D1 data access. All SQL lives here.
 //
 // GAPLESS NUMBERING (the tricky requirement):
-// The invoice number is derived INSIDE a single INSERT statement:
-//     seq = (SELECT COALESCE(MAX(seq),0)+1 FROM invoices)
+// Addendum 6 (2026-08-24): the booking number is YEAR-SCOPED — {booking_year}
+// {booking_seq, zero-padded 3} e.g. '2026036' — derived INSIDE a single INSERT:
+//     booking_seq = COALESCE(MAX(booking_seq) WHERE booking_year=?, seed, 0) + 1
 // Because D1 serialises writes to the database, this is atomic: either the row is
 // inserted with the next number, or nothing is inserted (no gap is ever burned by a
 // failed insert). Cancelled bookings become status='void' records that KEEP their
-// number, so the sequence stays gapless with a full audit trail.
+// number, so the sequence stays gapless with a full audit trail. `booking_no_seed`
+// (see schema.sql) supplies the floor for a year with no rows yet, so this year's
+// numbers continue above Kenneth's pre-existing Zoho receipt history.
 
 function randomToken() {
   // 32 hex chars, unguessable. crypto is available in the Workers runtime.
@@ -19,28 +22,38 @@ export async function createInvoice(env, d) {
   const token = randomToken();
   await env.DB.prepare(
     `INSERT INTO invoices
-       (seq, invoice_no, token, status,
+       (booking_year, booking_seq, booking_no, token, status,
         client_name, client_phone, client_email, client_nric_uen,
         event_type, venue_space, booking_date, start_time, end_time, hours,
         usual_rate, hourly_rate, rental_subtotal, discount_percent,
-        cleaning_fee, deposit_amount, pet_fee, discount, discount_note, rental_total, grand_total,
+        cleaning_fee, cleaning_fee_with, deposit_amount, pet_fee, discount, discount_note, rental_total, grand_total,
         rental_fee_note, cleaning_fee_note, deposit_note, pet_fee_note, promo_clause_title, promo_clause_text, promo_id, notes)
-     SELECT n,
-            'INV-' || printf('%03d', n),
+     SELECT y, n,
+            CAST(y AS TEXT) || printf('%03d', n),
             ?, 'issued',
             ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?,
-            ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?, ?, ?
-     FROM (SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM invoices)`
+     FROM (
+       -- '+8 hours' shifts to Singapore local time (UTC+8, no DST) before reading the
+       -- year, so a booking made right around UTC midnight on Dec 31/Jan 1 still gets
+       -- the year Kenneth would actually expect.
+       SELECT y, COALESCE(
+                   (SELECT MAX(booking_seq) FROM invoices WHERE booking_year = y),
+                   (SELECT start_seq FROM booking_no_seed WHERE booking_year = y),
+                   0
+                 ) + 1 AS n
+       FROM (SELECT CAST(strftime('%Y', 'now', '+8 hours') AS INTEGER) AS y)
+     )`
   )
     .bind(
       token,
       d.client_name, d.client_phone, d.client_email, d.client_nric_uen,
       d.event_type, d.venue_space, d.booking_date, d.start_time, d.end_time, d.hours,
       d.usual_rate ?? null, d.hourly_rate, d.rental_subtotal ?? null, d.discount_percent || 0,
-      d.cleaning_fee, d.deposit_amount, d.pet_fee, d.discount, d.discount_note, d.rental_total, d.grand_total,
+      d.cleaning_fee, d.cleaning_fee_with || "deposit", d.deposit_amount, d.pet_fee, d.discount, d.discount_note, d.rental_total, d.grand_total,
       d.rental_fee_note || null, d.cleaning_fee_note || null, d.deposit_note || null, d.pet_fee_note || null,
       d.promo_clause_title || null, d.promo_clause_text || null, d.promo_id || null, d.notes
     )
@@ -52,8 +65,8 @@ export function getInvoiceByToken(env, token) {
   return env.DB.prepare(`SELECT * FROM invoices WHERE token = ?`).bind(token).first();
 }
 
-export function getInvoiceByNo(env, no) {
-  return env.DB.prepare(`SELECT * FROM invoices WHERE invoice_no = ?`).bind(no).first();
+export function getInvoiceByBookingNo(env, no) {
+  return env.DB.prepare(`SELECT * FROM invoices WHERE booking_no = ?`).bind(no).first();
 }
 
 export function getInvoiceById(env, id) {
@@ -62,9 +75,9 @@ export function getInvoiceById(env, id) {
 
 export async function listInvoices(env) {
   const { results } = await env.DB.prepare(
-    `SELECT id, seq, invoice_no, token, status, client_name, event_type, venue_space, booking_date,
+    `SELECT id, booking_no, token, status, client_name, event_type, venue_space, booking_date,
             grand_total, deposit_amount, payment_status, cleaning_fee_status, deposit_status, signed_at, created_at
-     FROM invoices ORDER BY seq DESC`
+     FROM invoices ORDER BY id DESC`
   ).all();
   return results;
 }
@@ -84,26 +97,34 @@ export async function markSigned(env, id, { signature_png, signer_name }) {
   ).bind(signature_png, signer_name, id).run();
 }
 
-export async function setDriveFileIds(env, id, { agreement, bookingInvoice, depositInvoice }) {
+// AGR + INV — filed once at signing, frozen thereafter (never refiled by a payment
+// event). See setSecurityDepositFileId/setRentalReceiptFileId below for the two
+// documents that DO change after signing.
+export async function setDriveFileIds(env, id, { agreement, rentalInvoice }) {
   await env.DB.prepare(
     `UPDATE invoices
      SET drive_agreement_file_id = COALESCE(?, drive_agreement_file_id),
-         drive_booking_invoice_file_id = COALESCE(?, drive_booking_invoice_file_id),
-         drive_deposit_invoice_file_id = COALESCE(?, drive_deposit_invoice_file_id),
+         drive_rental_invoice_file_id = COALESCE(?, drive_rental_invoice_file_id),
          updated_at = datetime('now')
      WHERE id=?`
-  ).bind(agreement ?? null, bookingInvoice ?? null, depositInvoice ?? null, id).run();
+  ).bind(agreement ?? null, rentalInvoice ?? null, id).run();
 }
 
-// Receipts (Addendum 3) — distinct from the invoice Drive file ids above.
-export async function setReceiptFileIds(env, id, { rentalReceipt, depositReceipt }) {
+// RRC — filed once, the first time rental payment is confirmed (Addendum 3).
+export async function setRentalReceiptFileId(env, id, fileId) {
   await env.DB.prepare(
-    `UPDATE invoices
-     SET drive_rental_receipt_file_id = COALESCE(?, drive_rental_receipt_file_id),
-         drive_deposit_receipt_file_id = COALESCE(?, drive_deposit_receipt_file_id),
-         updated_at = datetime('now')
-     WHERE id=?`
-  ).bind(rentalReceipt ?? null, depositReceipt ?? null, id).run();
+    `UPDATE invoices SET drive_rental_receipt_file_id = ?, updated_at = datetime('now') WHERE id=?`
+  ).bind(fileId, id).run();
+}
+
+// SD — Addendum 6: ONE evolving document. Called both at signing (initial unpaid
+// bill) and again every time it's re-filed as payment status changes; always the
+// same Drive file id gets overwritten in place (see drive.js's fileToDrive), so this
+// setter just needs to run after every filing, not only the first.
+export async function setSecurityDepositFileId(env, id, fileId) {
+  await env.DB.prepare(
+    `UPDATE invoices SET drive_security_deposit_file_id = ?, updated_at = datetime('now') WHERE id=?`
+  ).bind(fileId, id).run();
 }
 
 // Sets a payment-event timestamp column ONLY if it isn't already set — re-applying
@@ -121,10 +142,10 @@ export async function markTimestampOnce(env, id, column) {
   ).bind(id).run();
 }
 
-export async function addPayment(env, invoiceId, { amount, kind, paid_on, note }) {
+export async function addPayment(env, invoiceId, { amount, kind, paid_on, note, payment_mode, bank, reference }) {
   await env.DB.prepare(
-    `INSERT INTO payments (invoice_id, amount, kind, paid_on, note) VALUES (?, ?, ?, ?, ?)`
-  ).bind(invoiceId, amount, kind, paid_on, note || null).run();
+    `INSERT INTO payments (invoice_id, amount, kind, paid_on, note, payment_mode, bank, reference) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(invoiceId, amount, kind, paid_on, note || null, payment_mode || null, bank || null, reference || null).run();
 }
 
 export async function setStatus(env, id, { payment_status, cleaning_fee_status, deposit_status }) {
@@ -263,7 +284,7 @@ export async function listUnrefundedPastEvent(env) {
 // 3-working-day promise, timed from acknowledged_at not the event date).
 export async function listDeductionsNeedingBalanceReminder(env) {
   const { results } = await env.DB.prepare(
-    `SELECT d.*, i.invoice_no, i.client_name, i.deposit_status, i.token
+    `SELECT d.*, i.booking_no, i.client_name, i.deposit_status, i.token
      FROM deductions d
      JOIN invoices i ON i.id = d.invoice_id
      WHERE d.status = 'acknowledged'

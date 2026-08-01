@@ -59,7 +59,7 @@ function render(signed){
   app.className='';
   app.innerHTML=
    '<div class="card"><div class="muted">'+BIZ+' · '+inv.agreement_title+'</div>'+
-     '<h1>'+inv.invoice_no+'</h1>'+
+     '<h1>'+inv.booking_no+'</h1>'+
      '<div class="muted">'+inv.event_type+' event · '+inv.venue_space+' · '+inv.booking_date+'</div>'+
      '<div class="row total"><span>Booking total</span><span>'+money(inv.grand_total)+'</span></div>'+
      '<div class="row muted"><span>Refundable security deposit (billed separately)</span><span>'+money(inv.deposit_amount)+'</span></div>'+
@@ -176,7 +176,7 @@ function render(acknowledged){
   app.className='';
   app.innerHTML=
    '<div class="card"><div class="muted">'+BIZ+' · Security Deposit Deduction Addendum</div>'+
-     '<h1>'+data.invoice_no+'</h1>'+
+     '<h1>'+data.booking_no+'</h1>'+
      '<div class="muted">'+data.event_type+' event · '+data.venue_space+' · '+data.booking_date+'</div>'+
      '<div class="row total"><span>Deduction amount</span><span>'+money(data.amount)+'</span></div>'+
      '<div class="row muted"><span>Balance refundable</span><span>'+money(data.balance_refundable)+'</span></div>'+
@@ -292,6 +292,7 @@ export function adminPage(env) {
      <div><label>Rate / Package rate ($/hr) <span class="muted">(Social: blank = usual weekday/weekend rate. Corporate: blank = auto by rate card)</span></label><input id="hourly_rate" type="number" placeholder="auto"></div>
      <div><label>Discount % <span class="muted">(Social only — plain number, e.g. 10. Leave blank for none; a promo may suggest one)</span></label><input id="discount_percent" type="number" placeholder="0"></div>
      <div><label>Cleaning fee (blank = auto by event type)</label><input id="cleaning_fee" type="number" placeholder="auto"></div>
+     <div><label>Cleaning fee billed with</label><select id="cleaning_fee_with"><option value="deposit">Deposit</option><option value="rental">Rental</option></select></div>
      <div><label>Refundable deposit (blank = default by event type)</label><input id="deposit_amount" type="number" placeholder="auto"></div>
      <div><label>&nbsp;</label><label style="display:flex;align-items:center;gap:6px;margin-top:9px"><input type="checkbox" id="has_pet" style="width:auto"> Pets present (+$100 cleaning)</label></div>
      <div><label>Discount / promo <span class="muted">(Corporate/Seminar only — e.g. "10% off", "$50 off". Leave blank for none)</span></label><input id="discount_note"></div>
@@ -407,14 +408,15 @@ document.getElementById('create').onclick=async()=>{
   const body={client_name:val('client_name'),client_nric_uen:val('client_nric_uen'),client_phone:val('client_phone'),client_email:val('client_email'),
     event_type:val('event_type'),venue_space:val('venue_space'),booking_date:val('booking_date'),hours:val('hours'),
     start_time:val('start_time'),end_time:val('end_time'),
-    hourly_rate:val('hourly_rate'),discount_percent:val('discount_percent'),cleaning_fee:val('cleaning_fee'),deposit_amount:val('deposit_amount'),
+    hourly_rate:val('hourly_rate'),discount_percent:val('discount_percent'),cleaning_fee:val('cleaning_fee'),
+    cleaning_fee_with:document.getElementById('cleaning_fee_with').value,deposit_amount:val('deposit_amount'),
     pet_fee:document.getElementById('has_pet').checked?100:0,discount_text:val('discount_note'),
     rental_fee_note:val('rental_fee_note'),cleaning_fee_note:val('cleaning_fee_note'),deposit_note:val('deposit_note'),
     promo_clause_title:val('promo_clause_title'),promo_clause_text:val('promo_clause_text'),
     notes:val('notes')};
   const r=await api('/api/invoices',{method:'POST',body:JSON.stringify(body)});
   const d=await r.json().catch(()=>({}));
-  if(r.ok){ msg.textContent=d.invoice.invoice_no+' created.'; await copy(d.signing_url); toast(d.invoice.invoice_no+' created — signing link copied to clipboard.'); load(); }
+  if(r.ok){ msg.textContent=d.invoice.booking_no+' created.'; await copy(d.signing_url); toast(d.invoice.booking_no+' created — signing link copied to clipboard.'); load(); }
   else { msg.textContent=d.error||'Failed.'; }
 };
 
@@ -426,15 +428,15 @@ async function load(){
   const rows=document.getElementById('rows');
   if(!d.invoices||!d.invoices.length){rows.innerHTML='<tr><td colspan="6" class="muted">No invoices yet.</td></tr>';return;}
   rows.innerHTML=d.invoices.map(i=>
-    '<tr><td>'+i.invoice_no+'</td><td>'+i.client_name+'</td><td>'+i.event_type+' · '+i.venue_space+'<br><span class="muted">'+i.booking_date+'</span></td>'+
+    '<tr><td>'+i.booking_no+'</td><td>'+i.client_name+'</td><td>'+i.event_type+' · '+i.venue_space+'<br><span class="muted">'+i.booking_date+'</span></td>'+
     '<td>'+money(i.grand_total)+'<br><span class="muted">deposit '+money(i.deposit_amount)+'</span></td>'+
     '<td><span class="pill '+i.status+'">'+i.status+'</span><br><span class="muted">'+i.payment_status+' / clean:'+i.cleaning_fee_status+' / deposit:'+i.deposit_status+'</span></td>'+
     '<td>'+
       '<button class="sec" onclick="copyLink(\\''+i.token+'\\')">Copy link</button> '+
-      '<button class="sec" onclick="addPay(\\''+i.invoice_no+'\\')">+ Payment</button> '+
-      '<button class="sec" onclick="setStat(\\''+i.invoice_no+'\\')">Status</button> '+
-      '<button class="sec" onclick="refile(\\''+i.invoice_no+'\\')">Re-file PDF</button> '+
-      (i.status!=='void'?'<button class="sec" onclick="voidInv(\\''+i.invoice_no+'\\')">Void</button>':'')+
+      '<button class="sec" onclick="addPay(\\''+i.booking_no+'\\')">+ Payment</button> '+
+      '<button class="sec" onclick="setStat(\\''+i.booking_no+'\\')">Status</button> '+
+      '<button class="sec" onclick="refile(\\''+i.booking_no+'\\')">Re-file PDF</button> '+
+      (i.status!=='void'?'<button class="sec" onclick="voidInv(\\''+i.booking_no+'\\')">Void</button>':'')+
     '</td></tr>').join('');
 }
 function copyLink(tok){ const url=location.origin+'/sign/'+tok; copy(url); toast('Signing link copied to clipboard.'); }
@@ -483,14 +485,20 @@ function addPay(no){
     '<label>Amount received (SGD)</label><input id="pAmount" type="number" step="0.01">'+
     '<label>Kind</label><select id="pKind"><option value="deposit">Deposit</option><option value="balance" selected>Balance</option><option value="cleaning_fee">Cleaning fee</option><option value="refund">Refund</option><option value="other">Other</option></select>'+
     '<label>Date</label><input id="pDate" type="date" value="'+new Date().toISOString().slice(0,10)+'">'+
+    '<label>Payment mode (optional, shown on the receipt Notes)</label><input id="pMode" placeholder="e.g. Paynow">'+
+    '<label>Bank (optional)</label><input id="pBank" placeholder="e.g. OCBC">'+
+    '<label>Reference (optional)</label><input id="pRef">'+
     '<label>Note (optional)</label><input id="pNote">',
     { okText:'Log payment', onOk: async(host)=>{
         const amount=host.querySelector('#pAmount').value;
         const kind=host.querySelector('#pKind').value;
         const paid_on=host.querySelector('#pDate').value;
         const note=host.querySelector('#pNote').value;
+        const payment_mode=host.querySelector('#pMode').value;
+        const bank=host.querySelector('#pBank').value;
+        const reference=host.querySelector('#pRef').value;
         if(!amount||!paid_on){ toast('Amount and date are required.'); return false; }
-        const r=await api('/api/invoices/'+no+'/payments',{method:'POST',body:JSON.stringify({amount:Number(amount),kind,paid_on,note})});
+        const r=await api('/api/invoices/'+no+'/payments',{method:'POST',body:JSON.stringify({amount:Number(amount),kind,paid_on,note,payment_mode,bank,reference})});
         if(r.ok){ toast('Payment logged.'); load(); } else { toast('Failed to log payment.'); return false; }
       } });
 }

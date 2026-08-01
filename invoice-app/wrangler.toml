@@ -55,4 +55,13 @@ BUSINESS_NAME     = "BojioVenue"
 BUSINESS_OPERATOR = "Kenneth Lu"
 BUSINESS_ENTITY   = "Novan Management"
 BUSINESS_UEN      = "53513299M"
+# Addendum 6: added the "TagA @ Tagore" line seen on the real RRC-2026036.pdf
+# sample (Kenneth's actual filed receipt) — missing from the address used until now.
+BUSINESS_ADDRESS_LINE1 = "81 Tagore Lane #03-20"
+BUSINESS_ADDRESS_LINE2 = "TagA @ Tagore"
+BUSINESS_ADDRESS_LINE3 = "Singapore 787502"
 BUSINESS_ADDRESS  = "81 Tagore Lane #03-20, Singapore 787502"
+# Addendum 6: money documents (invoice/receipt/deposit doc) show phone + email,
+# matching the real Zoho samples — no env var for these existed before now.
+BUSINESS_PHONE    = "(+65)8509 9176"
+BUSINESS_EMAIL    = "bojiovenue@gmail.com"

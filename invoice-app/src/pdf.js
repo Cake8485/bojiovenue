@@ -1,302 +1,237 @@
-// Server-side PDF builder (pdf-lib, pure JS — runs inside the Worker).
-// Built server-side on purpose: the client can't tamper with totals/dates.
-// Uses built-in Helvetica (no font files needed → smaller bundle).
+// Rental money documents (Addendum 6, 2026-08-24) — INV (Invoice, frozen bill filed
+// at signing) and the Security Deposit doc (SD, ONE evolving document re-filed in
+// place as its Balance Due changes). Both use the Zoho-matched "Money Document"
+// identity (brandingMoney.js) — a deliberately different visual identity from the
+// Agreement/Deduction Addendum's blue/yellow/purple (branding.js).
 //
-// Two separate documents per signed booking (NOT one combined doc — Kenneth's real
-// workflow keeps these apart): buildBookingInvoicePdf (rental + cleaning + pet fee,
-// minus any discount — the main charge) and buildDepositInvoicePdf (the refundable
-// security deposit only). Both carry the client's signature as proof of agreement,
-// same as the signed Agreement itself (see agreement.js).
+// RRC (the rental Official Receipt) shares almost all of INV's line-item/summary
+// logic — same charges, different title/doc-number-label/footer — so the shared
+// content builder lives here (buildRentalMoneyDoc) and receipts.js just calls it
+// with different presentation params. See schema.sql's Addendum 6 comment for why
+// SD has no receipt counterpart (it's one evolving document, not an invoice+receipt
+// pair, matching Kenneth's real Zoho SD-xxxxx samples).
 
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
-import { drawPayNowQr } from "./branding.js";
-import { invoicePayNowPayload } from "./paynow.js";
+import { isWeekend, SOCIAL_CLEANING_FEE, CORPORATE_CLEANING_FEE } from "./pricing.js";
+import {
+  startMoneyDoc, newMoneyPage, drawMoneyHeader, drawLineItemsTable, drawSummaryBlock, drawNotesBlock, drawTermsBlock, finishMoneyDoc,
+} from "./brandingMoney.js";
 
-const A4 = [595.28, 841.89];
-
-function startDoc() {
-  return PDFDocument.create();
-}
-
-async function shell(doc, inv, title) {
-  const page = doc.addPage(A4);
-  const font = await doc.embedFont(StandardFonts.Helvetica);
-  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
-  const { width, height } = page.getSize();
-
-  const dark = rgb(0.1, 0.1, 0.13);
-  const gray = rgb(0.45, 0.45, 0.5);
-  const rule = rgb(0.85, 0.85, 0.88);
-  const M = 50;
-  let y = height - M;
-
-  const T = (s, x, yy, o = {}) =>
-    page.drawText(String(s ?? ""), { x, y: yy, size: o.size ?? 10, font: o.f ?? font, color: o.color ?? dark });
-  const R = (s, xRight, yy, o = {}) => {
-    const f = o.f ?? font, size = o.size ?? 10;
-    const w = f.widthOfTextAtSize(String(s ?? ""), size);
-    page.drawText(String(s ?? ""), { x: xRight - w, y: yy, size, font: f, color: o.color ?? dark });
-  };
-  const hr = (yy) =>
-    page.drawLine({ start: { x: M, y: yy }, end: { x: width - M, y: yy }, thickness: 0.75, color: rule });
-
-  return { page, font, bold, width, height, dark, gray, rule, M, T, R, hr, y: () => y, setY: (v) => (y = v) };
-}
-
-const money = (n) => "$" + Number(n || 0).toFixed(2);
 function round2(n) { return Math.round(n * 100) / 100; }
-function kindLabel(k) {
-  return { deposit: "Deposit", balance: "Balance", cleaning_fee: "Cleaning fee", refund: "Refund", other: "Payment" }[k] || k;
+function dateOnly(ts) { return ts ? String(ts).slice(0, 10) : "___________"; }
+
+// Most recent payment matching any of `kinds` — payments arrive already sorted
+// paid_on ASC/id ASC (see db.js's getPayments), so the last match is the latest.
+function latestPaymentOf(payments, kinds) {
+  const matches = (payments || []).filter((p) => kinds.includes(p.kind));
+  return matches.length ? matches[matches.length - 1] : null;
 }
 
-function drawHeader(ctx, env, inv, docTitle, statusLine) {
-  const { T, R, hr, M, width, bold, gray } = ctx;
-  let y = ctx.y();
-  T(env.BUSINESS_NAME || "BojioVenue", M, y, { size: 20, f: bold });
-  R(docTitle, width - M, y + 4, { size: 13, f: bold, color: gray });
-  y -= 18;
-  T(`${env.BUSINESS_OPERATOR || ""} · ${env.BUSINESS_ENTITY || ""}`, M, y, { size: 9, color: gray });
-  R(inv.invoice_no, width - M, y, { size: 12, f: bold });
-  y -= 12;
-  T(`UEN ${env.BUSINESS_UEN || ""}`, M, y, { size: 9, color: gray });
-  R(statusLine, width - M, y, { size: 8.5, color: gray });
-  y -= 12;
-  T(env.BUSINESS_ADDRESS || "", M, y, { size: 9, color: gray });
-  y -= 20;
-  hr(y);
-  y -= 22;
-  ctx.setY(y);
-
-  const colB = width / 2;
-  T("BILL TO", M, y, { size: 8, f: bold, color: gray });
-  T("BOOKING", colB, y, { size: 8, f: bold, color: gray });
-  y -= 15;
-  T(inv.client_name, M, y, { size: 11, f: bold });
-  T(`${inv.event_type} event · ${inv.venue_space}`, colB, y, { size: 10 });
-  y -= 13;
-  T(inv.client_phone || "", M, y, { size: 9, color: gray });
-  T(`Date: ${inv.booking_date}`, colB, y, { size: 9, color: gray });
-  y -= 12;
-  T(inv.client_email || "", M, y, { size: 9, color: gray });
-  const timeStr = inv.start_time ? `${inv.start_time}–${inv.end_time || ""}  (${inv.hours}h)` : `${inv.hours}h`;
-  T(`Time: ${timeStr}`, colB, y, { size: 9, color: gray });
-  y -= 24;
-  ctx.setY(y);
+function notesLines(payment) {
+  if (!payment) return [];
+  const lines = ["Payment Received."];
+  if (payment.payment_mode) lines.push(`Payment Mode: ${payment.payment_mode}${payment.bank ? " (" + payment.bank + ")" : ""}`);
+  if (payment.reference) lines.push(`Reference: ${payment.reference}`);
+  return lines;
 }
 
-async function drawSignature(ctx, doc, inv) {
-  const { T, hr, M, rule } = ctx;
-  let y = ctx.y();
-  const sigTop = Math.max(y, 150);
-  hr(sigTop); y = sigTop - 16;
-  T("CLIENT ACKNOWLEDGEMENT & SIGNATURE", M, y, { size: 8, f: ctx.bold, color: ctx.gray });
-  y -= 66;
-  if (inv.signature_png) {
-    try {
-      const png = await doc.embedPng(inv.signature_png);
-      const dims = png.scaleToFit(190, 60);
-      ctx.page.drawImage(png, { x: M, y, width: dims.width, height: dims.height });
-    } catch (e) {
-      console.log("[pdf] signature embed failed: " + e);
-    }
+const RENTAL_TERMS = [
+  "Deposit will be refunded within 5 to 7 working days after event, provided no damage, loss or breach of Agreement or House Rules has occured. Refer to Agreement Clause 8 for details.",
+  "Overtime charges apply after 15 mins: Weekday $150/hr, Weekend $180/hr.",
+  "Client and guests must comply with BoJioVenue Agreement and House Rules at all times.",
+  "Damages, missing items, or excessive cleaning will be charged against the deposit or billed separately.",
+];
+
+const DEPOSIT_TERMS = [
+  "Deposit will be refunded within 5 to 7 working days after the event, subject to inspection and house rules.",
+  "Damages, missing items, or excessive cleaning will be charged against the deposit or billed separately.",
+];
+
+// Rental row's Rate/Discount/Amount differ by pricing engine — Social's rental_total
+// is already net of discount_percent; Corporate/Seminar's rental_subtotal is GROSS
+// (its flat $ discount is only subtracted at grand_total) — see pricing.js.
+function rentalRowNumbers(inv) {
+  if (inv.event_type === "Social") {
+    return {
+      rate: inv.rental_subtotal,
+      discountDisplay: Number(inv.discount_percent) > 0 ? `${Number(inv.discount_percent).toFixed(2)}%` : "0.00",
+      amount: inv.rental_total,
+    };
   }
-  ctx.page.drawLine({ start: { x: M, y: y - 4 }, end: { x: M + 210, y: y - 4 }, thickness: 0.75, color: rule });
-  T(inv.signer_name || inv.client_name || "", M, y - 16, { size: 9 });
-  T(inv.signed_at ? `Signed: ${inv.signed_at} (SGT+/-)` : "Unsigned", M, y - 28, { size: 8, color: ctx.gray });
-  ctx.setY(y - 28);
+  const rate = inv.rental_subtotal ?? inv.rental_total;
+  const amount = round2(Number(rate) - Number(inv.discount || 0));
+  return {
+    rate,
+    discountDisplay: Number(inv.discount) > 0 ? Number(inv.discount).toFixed(2) : "0.00",
+    amount,
+  };
 }
 
-function drawFooter(ctx, text) {
-  ctx.T(text, ctx.M, 40, { size: 8, color: ctx.gray });
+function rentalItemDescription(inv) {
+  if (inv.event_type !== "Social") return `${inv.venue_space} Rental — ${inv.hours} Hours`;
+  const weekend = isWeekend(inv.booking_date);
+  return `${weekend ? "Weekends" : "Weekdays"} (${inv.hours} Hours) Package`;
 }
 
-// "Scan to pay via PayNow" block — a QR encoding the exact amount still owed (so a
-// partially-paid, re-filed invoice always shows the remaining balance, not the
-// original total) plus the reference Kenneth sees in his own banking app.
-function drawPayNowQrBlock(ctx, env, inv, amount, kind) {
-  const { T, hr, M, gray, bold } = ctx;
-  let y = ctx.y();
-  hr(y); y -= 15;
-  const size = 64;
-  const payload = invoicePayNowPayload(env, inv, amount, kind);
-  drawPayNowQr(ctx.page, payload, M, y, size);
-  T("Scan to pay via PayNow", M + size + 12, y - 8, { size: 9, f: bold });
-  T(`Amount: ${money(amount)}`, M + size + 12, y - 22, { size: 9, color: gray });
-  T(`UEN: ${env.BUSINESS_UEN || ""} (${env.BUSINESS_ENTITY || "Novan Management"})`, M + size + 12, y - 34, { size: 8.5, color: gray });
-  y -= size + 12;
-  ctx.setY(y);
+function rentalItemSublines(inv) {
+  const lines = [];
+  if (inv.event_type === "Social" && isWeekend(inv.booking_date)) {
+    lines.push("Include: Fri to Sun, Eve of PH & PH");
+  }
+  if (inv.rental_fee_note) {
+    const pct = Number(inv.discount_percent) > 0 ? ` @ ${Number(inv.discount_percent).toFixed(0)}% off!` : "";
+    lines.push(`${inv.rental_fee_note}${pct}`);
+  }
+  return lines;
 }
 
-// ---------------------------------------------------------------------------
-// BOOKING INVOICE — rental + pet fee, minus discount. Payment 1 in Kenneth's flow
-// ("rental fee — confirms the booking"). Cleaning fee moved to the Deposit Invoice
-// as of Addendum 3 (2026-08-10), since Kenneth now collects it together with the
-// deposit 7 days before the event rather than alongside the rental fee.
-//
-// Discount handling: for Social bookings, `inv.discount` is already baked into
-// `inv.rental_total` by pricing.js (see schema.sql's comment on the invoices table)
-// — it's shown here purely for transparency, not subtracted again. For Corporate/
-// Seminar, `inv.rental_total` is gross and `inv.discount` is subtracted here.
-// ---------------------------------------------------------------------------
-export async function buildBookingInvoicePdf(env, inv, payments = []) {
-  const doc = await startDoc();
-  const ctx = await shell(doc, inv, "Booking Invoice");
-  const { T, R, hr, M, width, bold, gray } = ctx;
+// Cleaning-fee row's anchor Rate is the STANDARD fee for this event type ($80
+// Social / $50 Corporate — Addendum 6's pricing-anchor fix, replacing the old
+// Zoho receipt's incorrect $100), with Discount = anchor - actual charged, so the
+// row always reads consistently regardless of WHY the actual differs (a promo
+// override or a manual one-off) — anchor - discount = amount always holds.
+function cleaningFeeRow(inv) {
+  const anchor = inv.event_type === "Social" ? SOCIAL_CLEANING_FEE : CORPORATE_CLEANING_FEE;
+  const actual = Number(inv.cleaning_fee || 0);
+  const discount = Math.max(0, round2(anchor - actual));
+  return {
+    cells: { desc: "Cleaning Fee", qty: "1.00", rate: anchor.toFixed(2), discount: discount ? discount.toFixed(2) : "0.00", amount: actual.toFixed(2) },
+    sublines: inv.cleaning_fee_note ? [inv.cleaning_fee_note] : [],
+    bold: true,
+    amount: actual,
+  };
+}
 
-  drawHeader(ctx, env, inv, "BOOKING INVOICE", `Rental: ${inv.payment_status}`);
-  let y = ctx.y();
+const RENTAL_COLUMNS = [
+  { key: "num", label: "#", width: 20, align: "left" },
+  { key: "desc", label: "Item & Description", width: 240, align: "left" },
+  { key: "qty", label: "Qty", width: 40, align: "right" },
+  { key: "rate", label: "Rate", width: 70, align: "right" },
+  { key: "discount", label: "Discount", width: 70, align: "right" },
+  { key: "amount", label: "Amount", width: 71, align: "right" },
+];
 
-  hr(y); y -= 15;
-  T("DESCRIPTION", M, y, { size: 8, f: bold, color: gray });
-  R("AMOUNT", width - M, y, { size: 8, f: bold, color: gray });
-  y -= 16;
-  // Social: show the GROSS subtotal here (not the already-net rental_total) so the
-  // Discount line below visibly subtracts from it down to the same TOTAL shown
-  // further down — otherwise "rental $1019, discount -$181, TOTAL $1019" reads as
-  // if the discount was dropped, even though the total itself is correct.
-  const rentalLineAmount = inv.event_type === "Social" ? Number(inv.rental_subtotal ?? inv.rental_total) : Number(inv.rental_total);
-  T(`Venue rental — ${money(inv.hourly_rate)}/hr × ${inv.hours}h`, M, y);
-  R(money(rentalLineAmount), width - M, y);
-  y -= 15;
+// Shared by INV (buildRentalInvoicePdf) and RRC (receipts.js's buildRentalReceiptPdf)
+// — same charges, different presentation. `paidKinds`: which payments.kind values
+// count toward "Payment Made" (rental fee only — cleaning fee, if billed with
+// rental, is logged as its own kind and is part of THIS document's total too, so
+// both are included).
+export async function buildRentalMoneyDoc(env, inv, payments, { title, docNumberLabel, footer, variant }) {
+  const ctx = await startMoneyDoc();
+  ctx.page = newMoneyPage(ctx.doc);
+
+  const rows = [];
+  const rn = rentalRowNumbers(inv);
+  rows.push({
+    cells: {
+      num: "1", desc: rentalItemDescription(inv), qty: "1.00",
+      rate: Number(rn.rate).toFixed(2), discount: rn.discountDisplay, amount: Number(rn.amount).toFixed(2),
+    },
+    sublines: rentalItemSublines(inv),
+    bold: true,
+    amount: rn.amount,
+  });
+
+  const cleaningOnThisDoc = (inv.cleaning_fee_with || "deposit") === "rental" && Number(inv.cleaning_fee) > 0;
+  if (cleaningOnThisDoc) {
+    const cf = cleaningFeeRow(inv);
+    rows.push({ cells: { num: "2", ...cf.cells }, sublines: cf.sublines, bold: cf.bold, amount: cf.amount });
+  }
   if (Number(inv.pet_fee) > 0) {
-    T("Pet cleaning fee", M, y);
-    R(money(inv.pet_fee), width - M, y);
-    y -= 15;
-  }
-  if (Number(inv.discount) > 0) {
-    T(`Discount${inv.discount_note ? " (" + inv.discount_note + ")" : ""}`, M, y);
-    R("-" + money(inv.discount), width - M, y);
-    y -= 15;
-  }
-  const total = inv.event_type === "Social"
-    ? round2(Number(inv.rental_total) + Number(inv.pet_fee || 0)) // discount already net in rental_total
-    : round2(Number(inv.rental_total) + Number(inv.pet_fee || 0) - Number(inv.discount || 0));
-  y -= 3; hr(y); y -= 16;
-  T("TOTAL", M, y, { size: 11, f: bold });
-  R(money(total), width - M, y, { size: 11, f: bold });
-  y -= 26;
-  ctx.setY(y);
-
-  const receivedTowardTotal = payments
-    .filter((p) => p.kind === "balance" || p.kind === "other")
-    .reduce((s, p) => s + p.amount, 0);
-  const balance = round2(total - receivedTowardTotal);
-
-  const line = (label, val, strong = false) => {
-    T(label, M, y, { size: 9, color: gray });
-    R(val, width - M, y, { size: strong ? 11 : 10, f: strong ? bold : ctx.font });
-    y -= 14;
-  };
-  T("PAYMENT SUMMARY", M, y, { size: 8, f: bold, color: gray });
-  y -= 15;
-  line("Total received", money(receivedTowardTotal));
-  line("Balance outstanding", money(balance), true);
-  line("Rental status", inv.payment_status);
-  y -= 6;
-  ctx.setY(y);
-
-  if (balance > 0) drawPayNowQrBlock(ctx, env, inv, balance, "rental");
-
-  const relevant = payments.filter((p) => p.kind === "balance" || p.kind === "other");
-  if (relevant.length) {
-    y = ctx.y();
-    hr(y); y -= 15;
-    T("PAYMENT HISTORY", M, y, { size: 8, f: bold, color: gray });
-    y -= 14;
-    for (const p of relevant) {
-      T(`${p.paid_on} · ${kindLabel(p.kind)}${p.note ? " · " + p.note : ""}`, M, y, { size: 9, color: gray });
-      R(money(p.amount), width - M, y, { size: 9 });
-      y -= 13;
-    }
-    y -= 6;
-    ctx.setY(y);
+    rows.push({
+      cells: { num: String(rows.length + 1), desc: "Pet Cleaning Fee", qty: "1.00", rate: Number(inv.pet_fee).toFixed(2), discount: "0.00", amount: Number(inv.pet_fee).toFixed(2) },
+      sublines: [], bold: true, amount: Number(inv.pet_fee),
+    });
   }
 
-  await drawSignature(ctx, doc, inv);
-  drawFooter(ctx, "Booking invoice — covers venue rental only. Not GST-registered — no GST applicable.");
+  const subTotal = round2(rows.reduce((s, r) => s + Number(r.amount || 0), 0));
+  const paidKinds = cleaningOnThisDoc ? ["balance", "other", "cleaning_fee"] : ["balance", "other"];
+  const paymentMade = round2(payments.filter((p) => paidKinds.includes(p.kind)).reduce((s, p) => s + Number(p.amount || 0), 0));
+  const balanceDue = Math.max(0, round2(subTotal - paymentMade));
 
-  return await doc.save();
+  let y = drawMoneyHeader(ctx, env, {
+    docTitle: title,
+    docNumberLabel,
+    docNumber: inv.booking_no,
+    balanceDue,
+    leftInfo:
+      variant === "receipt"
+        ? [
+            { label: "Receipt Date :", value: dateOnly(inv.rental_paid_at) },
+            { label: "Event Time :", value: inv.start_time ? `${inv.start_time} to ${inv.end_time || ""}` : "-" },
+            { label: "Event Type :", value: inv.event_type },
+          ]
+        : [
+            { label: "Invoice Date :", value: dateOnly(inv.signed_at || inv.created_at) },
+            { label: "Event Date :", value: inv.booking_date },
+            { label: "Event Type :", value: inv.event_type },
+          ],
+    client: { header: "Bill To", name: inv.client_name, phone: inv.client_phone },
+  });
+
+  y = drawLineItemsTable(ctx, y, { columns: RENTAL_COLUMNS, rows: rows.map((r) => ({ cells: r.cells, sublines: r.sublines, bold: r.bold })) });
+  y = drawSummaryBlock(ctx, y, { subTotal, total: subTotal, paymentMade, balanceDue });
+  y = drawNotesBlock(ctx, y, notesLines(latestPaymentOf(payments, paidKinds)));
+  drawTermsBlock(ctx, y, RENTAL_TERMS);
+
+  finishMoneyDoc(ctx, { footer });
+  return await ctx.doc.save();
+}
+
+export function buildRentalInvoicePdf(env, inv, payments = []) {
+  return buildRentalMoneyDoc(env, inv, payments, { title: "Invoice", docNumberLabel: "Invoice", footer: "plain", variant: "invoice" });
 }
 
 // ---------------------------------------------------------------------------
-// DEPOSIT INVOICE — security deposit + cleaning fee. Payment 2 in Kenneth's flow,
-// due 7 days before the event. Cleaning fee moved here from the Booking Invoice as
-// of Addendum 3 (2026-08-10) to match how these two are now actually collected
-// together, in one payment, marked by a single "INV-XXX deposit paid" command.
+// SECURITY DEPOSIT (SD) — ONE evolving document (Addendum 6). Filed at signing
+// (unpaid) and re-filed IN PLACE (same filename) once "deposit paid" fires. Unlike
+// rental, never gets a second "receipt" file — matches the real SD-00023.pdf
+// sample, which stays titled "Deposit Invoice" even at Balance Due $0.00. Simpler
+// 3-column table (#/Description/Amount only, no Qty/Rate/Discount) — also matches
+// the real sample exactly.
 // ---------------------------------------------------------------------------
-export async function buildDepositInvoicePdf(env, inv, payments = []) {
-  const doc = await startDoc();
-  const ctx = await shell(doc, inv, "Deposit Invoice");
-  const { T, R, hr, M, width, bold, gray } = ctx;
+const DEPOSIT_COLUMNS = [
+  { key: "num", label: "#", width: 20, align: "left" },
+  { key: "desc", label: "Description", width: 350, align: "left" },
+  { key: "amount", label: "Amount", width: 141, align: "right" },
+];
 
-  drawHeader(ctx, env, inv, "DEPOSIT INVOICE", `Deposit: ${inv.deposit_status}`);
-  let y = ctx.y();
+export async function buildSecurityDepositPdf(env, inv, payments = []) {
+  const ctx = await startMoneyDoc();
+  ctx.page = newMoneyPage(ctx.doc);
 
-  hr(y); y -= 15;
-  T("DESCRIPTION", M, y, { size: 8, f: bold, color: gray });
-  R("AMOUNT", width - M, y, { size: 8, f: bold, color: gray });
-  y -= 16;
-  T("Refundable security deposit", M, y);
-  R(money(inv.deposit_amount), width - M, y);
-  y -= 15;
-  if (Number(inv.cleaning_fee) > 0) {
-    T("Cleaning fee", M, y);
-    R(money(inv.cleaning_fee), width - M, y);
-    y -= 15;
-  }
-  const total = round2(Number(inv.deposit_amount || 0) + Number(inv.cleaning_fee || 0));
-  y -= 3; hr(y); y -= 16;
-  T("TOTAL", M, y, { size: 11, f: bold });
-  R(money(total), width - M, y, { size: 11, f: bold });
-  y -= 16;
-  T("The security deposit is fully refundable, subject to the terms of the signed Agreement", M, y, { size: 8.5, color: gray });
-  y -= 12;
-  T("(no damage, loss, excessive cleaning, or breach of House Rules). The cleaning fee is not refundable.", M, y, { size: 8.5, color: gray });
-  y -= 26;
-  ctx.setY(y);
-
-  const depositCollected = payments.filter((p) => p.kind === "deposit").reduce((s, p) => s + p.amount, 0);
-  const cleaningCollected = payments.filter((p) => p.kind === "cleaning_fee").reduce((s, p) => s + p.amount, 0);
-  const depositRefunded = payments.filter((p) => p.kind === "refund").reduce((s, p) => s + p.amount, 0);
-  const depositHeld = round2(depositCollected - depositRefunded);
-  const balance = round2(total - depositCollected - cleaningCollected);
-
-  const line = (label, val, strong = false) => {
-    T(label, M, y, { size: 9, color: gray });
-    R(val, width - M, y, { size: strong ? 11 : 10, f: strong ? bold : ctx.font });
-    y -= 14;
-  };
-  T("DEPOSIT & CLEANING FEE STATUS", M, y, { size: 8, f: bold, color: gray });
-  y -= 15;
-  line("Deposit collected", money(depositCollected));
-  line("Deposit refunded", money(depositRefunded));
-  line("Currently held", money(depositHeld));
-  line("Cleaning fee collected", money(cleaningCollected));
-  line("Balance outstanding", money(balance), true);
-  line("Deposit status", inv.deposit_status);
-  line("Cleaning fee status", inv.cleaning_fee_status);
-  y -= 6;
-  ctx.setY(y);
-
-  if (balance > 0) drawPayNowQrBlock(ctx, env, inv, balance, "deposit");
-
-  const relevant = payments.filter((p) => p.kind === "deposit" || p.kind === "refund" || p.kind === "cleaning_fee");
-  if (relevant.length) {
-    y = ctx.y();
-    hr(y); y -= 15;
-    T("PAYMENT HISTORY", M, y, { size: 8, f: bold, color: gray });
-    y -= 14;
-    for (const p of relevant) {
-      T(`${p.paid_on} · ${kindLabel(p.kind)}${p.note ? " · " + p.note : ""}`, M, y, { size: 9, color: gray });
-      R(money(p.kind === "refund" ? -p.amount : p.amount), width - M, y, { size: 9 });
-      y -= 13;
-    }
-    y -= 6;
-    ctx.setY(y);
+  const rows = [{ cells: { num: "1", desc: "Refundable Security Deposit", amount: Number(inv.deposit_amount || 0).toFixed(2) }, sublines: [], bold: true, amount: Number(inv.deposit_amount || 0) }];
+  const cleaningOnThisDoc = (inv.cleaning_fee_with || "deposit") === "deposit" && Number(inv.cleaning_fee) > 0;
+  if (cleaningOnThisDoc) {
+    rows.push({
+      cells: { num: "2", desc: "Cleaning Fee", amount: Number(inv.cleaning_fee || 0).toFixed(2) },
+      sublines: inv.cleaning_fee_note ? [inv.cleaning_fee_note] : [],
+      bold: true,
+      amount: Number(inv.cleaning_fee || 0),
+    });
   }
 
-  await drawSignature(ctx, doc, inv);
-  drawFooter(ctx, "Deposit invoice — refundable security deposit + cleaning fee, separate from the booking invoice.");
+  const subTotal = round2(rows.reduce((s, r) => s + Number(r.amount || 0), 0));
+  const paidKinds = cleaningOnThisDoc ? ["deposit", "cleaning_fee"] : ["deposit"];
+  const paymentMade = round2(payments.filter((p) => paidKinds.includes(p.kind)).reduce((s, p) => s + Number(p.amount || 0), 0));
+  const balanceDue = Math.max(0, round2(subTotal - paymentMade));
 
-  return await doc.save();
+  let y = drawMoneyHeader(ctx, env, {
+    docTitle: "Deposit Invoice",
+    docNumberLabel: "Retainer",
+    docNumber: inv.booking_no,
+    balanceDue,
+    leftInfo: [
+      { label: "Deposit Date :", value: inv.deposit_paid_at ? dateOnly(inv.deposit_paid_at) : "Pending" },
+      { label: "Event Date :", value: inv.booking_date },
+    ],
+    client: { header: "Bill To", name: inv.client_name, phone: inv.client_phone },
+  });
+
+  y = drawLineItemsTable(ctx, y, { columns: DEPOSIT_COLUMNS, rows: rows.map((r) => ({ cells: r.cells, sublines: r.sublines, bold: r.bold })) });
+  y = drawSummaryBlock(ctx, y, { subTotal, total: subTotal, paymentMade, balanceDue });
+  y = drawNotesBlock(ctx, y, notesLines(latestPaymentOf(payments, paidKinds)));
+  drawTermsBlock(ctx, y, DEPOSIT_TERMS);
+
+  finishMoneyDoc(ctx, { footer: "plain" });
+  return await ctx.doc.save();
 }

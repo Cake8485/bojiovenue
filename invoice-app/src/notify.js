@@ -3,7 +3,7 @@
 // Written so a second channel (e.g. email via Resend) can be dropped in without
 // touching callers.
 
-// filed: { agreement, bookingInvoice, depositInvoice } — each either a Drive
+// filed: { agreement, rentalInvoice, securityDeposit } — each either a Drive
 // files.create response ({id, name, webViewLink}) or null if that document
 // failed to file. Includes the actual clickable Drive link per document, per
 // Kenneth's request, not just "which folder it's in."
@@ -13,11 +13,11 @@ export async function notifySigned(env, invoice, filed = {}) {
     doc ? `  • ${label}: ${doc.webViewLink}` : `  • ${label} — FAILED to file, retry from admin`;
   const filedLines = [
     docLine("Agreement", filed.agreement),
-    docLine("Booking Invoice", filed.bookingInvoice),
-    docLine("Deposit Invoice", filed.depositInvoice),
+    docLine("Rental Invoice", filed.rentalInvoice),
+    docLine("Deposit Invoice", filed.securityDeposit),
   ].join("\n");
   const text =
-    `✅ ${invoice.invoice_no} signed by ${invoice.signer_name || invoice.client_name}\n` +
+    `✅ ${invoice.booking_no} signed by ${invoice.signer_name || invoice.client_name}\n` +
     `${invoice.event_type} event · ${invoice.venue_space} · ${invoice.booking_date}\n` +
     `Booking total: $${Number(invoice.grand_total || 0).toFixed(2)}   Deposit: $${Number(invoice.deposit_amount || 0).toFixed(2)}\n` +
     `Filed to Drive folder ${month}:\n${filedLines}`;
