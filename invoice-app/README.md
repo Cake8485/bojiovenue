@@ -240,10 +240,25 @@ all **built and verified working end-to-end** on real infrastructure — tested 
 calls, a real simulated Telegram webhook payload, and by downloading + reading the actual
 generated PDFs from Drive, not just trusting success responses.
 
-**Not yet deployed to production** — secrets currently only exist in local `.dev.vars`.
-Remaining before going live:
-1. `wrangler secret put` × 6 on the real Worker
-2. `wrangler deploy`
-3. Attach the `invoice.bojiovenue.com` custom domain
-4. Register the Telegram webhook (`setWebhook`) against the live URL — can't be done until deployed
-5. The open questions above
+**Deployed and live** (since 2026-08-02) at `https://bojiovenue-invoice.cake8485.workers.dev`.
+Secrets are pushed via `wrangler secret put`, Telegram webhook is registered against the live
+URL. The `invoice.bojiovenue.com` custom domain is intentionally deferred — its Cloudflare zone
+is on a different account than this Worker, and nothing touches that domain without Kenneth's
+say-so; the `workers.dev` URL works fine in the meantime (see `PUBLIC_BASE_URL` in
+`wrangler.toml`).
+
+**`npm run deploy` always applies `schema.sql` to the production D1 database first** (`npm run
+db:init`, chained automatically), THEN deploys the Worker code. This is a deliberate fix, not
+the original design — for weeks, `schema.sql` changes only ever got applied to the local dev
+database (`db:init:local`, run constantly during testing) and never to `--remote`, so production
+silently fell behind: 4 tables missing entirely, plus `invoices`/`payments` missing columns from
+later addenda. It went unnoticed until a real WhatsApp-template booking hit the missing
+`pending_wa_accumulation` table and crashed. Fixed by making the deploy script itself apply
+schema first, every time — safe because `schema.sql` is fully idempotent (`CREATE TABLE IF NOT
+EXISTS`, `INSERT OR IGNORE`, nothing destructive). **This does NOT cover adding a column to an
+already-existing table** — see the caveat at the top of `schema.sql` — that still needs an
+explicit `ALTER TABLE` statement added by hand when it happens.
+
+Remaining, at Kenneth's own pace:
+1. The `invoice.bojiovenue.com` custom domain (deferred — see above)
+2. The open questions above

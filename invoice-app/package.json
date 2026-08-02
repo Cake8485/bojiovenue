@@ -7,7 +7,7 @@
   "scripts": {
     "test": "node test-parsing.js && node test-pricing.js",
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "deploy": "npm run db:init && wrangler deploy",
     "db:create": "wrangler d1 create bojiovenue-invoice",
     "db:init": "wrangler d1 execute bojiovenue-invoice --remote --file=./schema.sql",
     "db:init:local": "wrangler d1 execute bojiovenue-invoice --local --file=./schema.sql"

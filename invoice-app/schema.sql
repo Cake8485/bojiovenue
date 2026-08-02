@@ -2,6 +2,26 @@
 -- Rental (INV bill + RRC receipt, two documents) and Security Deposit (SD, one
 -- evolving document re-filed in place as its Balance Due changes) — see Addendum 6
 -- comment on the invoices table below for the numbering/document-identity model.
+--
+-- `npm run deploy` now runs this against --remote automatically, every time,
+-- BEFORE `wrangler deploy` (2026-08-02, after a real production incident: this
+-- file gained 4 new tables and new columns on `invoices`/`payments` across
+-- several addenda, but only ever got applied to --local — production silently
+-- fell behind for weeks until a real WhatsApp-template booking hit
+-- `pending_wa_accumulation` and crashed with "no such table"). Safe to run
+-- unconditionally because every statement here is idempotent — CREATE TABLE
+-- IF NOT EXISTS, CREATE INDEX IF NOT EXISTS, INSERT OR IGNORE, nothing
+-- destructive, ever.
+--
+-- KNOWN RESIDUAL GAP, not solved by the above: this only protects WHOLE new
+-- tables (CREATE TABLE IF NOT EXISTS is a no-op once the table exists at all).
+-- If a future change adds a COLUMN to an EXISTING table (like Addendum 6 did
+-- to `invoices`/`payments`), that needs an explicit `ALTER TABLE ... ADD
+-- COLUMN` statement added here too — schema.sql cannot detect that on its own,
+-- and re-running it will NOT retroactively add a column to a table that
+-- already exists in an older shape. Whoever adds a new invoices/payments/etc.
+-- column in the future: add the matching ALTER TABLE guard here in the same
+-- change, don't rely on this file's auto-run alone.
 
 -- Promo presets (added 2026-08-03). Defined once, auto-applied to new bookings
 -- whose booking_date falls within [valid_from, valid_to] and where active=1.
