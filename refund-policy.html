@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>BojioVenue — Refund & Cancellation Policy</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --lavender: #F3EFFE;
+    --lavender-deep: #7B6FD6;
+    --coral: #FF8FAB;
+    --mint: #B5EDD5;
+    --ink: #2E2A4A;
+    --ink-soft: #5A5578;
+    --paper: #FFFFFF;
+    --warn-bg: #FFF4E0;
+    --warn-border: #F5A623;
+    --warn-ink: #8A5A00;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--lavender);
+    color: var(--ink);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 820px; margin: 0 auto; padding: 32px 20px 80px; }
+
+  header.top { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+  .logo-mark { width: 44px; height: 44px; border-radius: 12px; background: var(--ink); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .logo-mark svg { width: 28px; height: 28px; }
+  .brand-name { font-family: 'Plus Jakarta Sans', sans-serif; font-weight: 800; font-size: 20px; color: var(--ink); line-height: 1.1; }
+  .brand-sub { font-size: 12px; color: var(--ink-soft); letter-spacing: 0.02em; }
+
+  h1 { font-family: 'Plus Jakarta Sans', sans-serif; font-weight: 800; font-size: 34px; letter-spacing: -0.02em; margin: 28px 0 6px; color: var(--ink); }
+  .intro { font-size: 15px; color: var(--ink-soft); margin-bottom: 24px; max-width: 60ch; }
+
+  .banner {
+    background: var(--warn-bg);
+    border: 2px solid var(--warn-border);
+    border-radius: 16px;
+    padding: 20px 22px;
+    margin-bottom: 32px;
+  }
+  .banner .banner-title {
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-weight: 800;
+    font-size: 15px;
+    color: var(--warn-ink);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+  }
+  .banner p { font-size: 14.5px; color: #6B4600; margin-bottom: 8px; }
+  .banner p:last-child { margin-bottom: 0; }
+  .banner .split-table {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-top: 12px;
+  }
+  .banner .split-col {
+    background: rgba(255,255,255,0.55);
+    border-radius: 10px;
+    padding: 12px 14px;
+  }
+  .banner .split-col .split-label {
+    font-weight: 700;
+    font-size: 12.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--warn-ink);
+    margin-bottom: 4px;
+  }
+  .banner .split-col .split-val { font-size: 14px; color: #4A3200; }
+
+  nav.toc {
+    background: var(--paper);
+    border-radius: 16px;
+    padding: 18px 20px;
+    margin-bottom: 32px;
+  }
+  nav.toc .toc-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--lavender-deep); margin-bottom: 10px; }
+  nav.toc a {
+    display: block;
+    font-size: 14.5px;
+    color: var(--ink-soft);
+    text-decoration: none;
+    padding: 5px 0;
+    border-bottom: 1px dashed rgba(46,42,74,0.1);
+  }
+  nav.toc a:last-child { border-bottom: none; }
+  nav.toc a:hover { color: var(--lavender-deep); }
+
+  section.rule-block {
+    background: var(--paper);
+    border-radius: 18px;
+    padding: 24px 26px;
+    margin-bottom: 18px;
+    scroll-margin-top: 20px;
+  }
+  section.rule-block h2 {
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--lavender-deep);
+    margin-bottom: 12px;
+  }
+  section.rule-block p, section.rule-block li { font-size: 14.5px; color: var(--ink-soft); margin-bottom: 8px; }
+  section.rule-block ul { padding-left: 20px; margin: 6px 0 10px; }
+  section.rule-block li { margin-bottom: 4px; }
+  section.rule-block strong { color: var(--ink); }
+
+  .exception-tag {
+    display: inline-block;
+    background: var(--coral);
+    color: white;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    padding: 3px 9px;
+    border-radius: 999px;
+    margin-left: 8px;
+    vertical-align: middle;
+  }
+
+  .fine-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 10px 0 14px;
+    font-size: 14px;
+  }
+  .fine-table th {
+    text-align: left;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--lavender-deep);
+    padding: 6px 8px;
+    border-bottom: 1px solid rgba(46,42,74,0.12);
+  }
+  .fine-table td {
+    padding: 8px;
+    border-bottom: 1px solid rgba(46,42,74,0.07);
+    color: var(--ink-soft);
+  }
+  .fine-table tr:last-child td { border-bottom: none; }
+  .fine-table td.amt { color: var(--ink); font-weight: 700; text-align: right; }
+
+  .split-inline {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin: 10px 0 14px;
+  }
+  .split-inline .split-card {
+    background: var(--lavender);
+    border-radius: 10px;
+    padding: 12px 14px;
+  }
+  .split-inline .split-card .lbl { font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--lavender-deep); margin-bottom: 4px; }
+  .split-inline .split-card .val { font-size: 14px; color: var(--ink); }
+
+  .amenity-group { margin-bottom: 16px; }
+  .amenity-group h3 {
+    font-size: 13px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--ink);
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .amenity-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .amenity-item {
+    background: var(--mint);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 13.5px;
+    display: flex;
+    justify-content: space-between;
+  }
+  .amenity-item .price { font-weight: 700; }
+  .amenity-item.entertainment { background: #FFE0EA; }
+
+  footer.contact {
+    text-align: center;
+    padding: 24px 0 8px;
+    font-size: 13px;
+    color: var(--ink-soft);
+  }
+  footer.contact a { color: var(--lavender-deep); font-weight: 600; text-decoration: none; }
+
+  @media (max-width: 480px) {
+    h1 { font-size: 26px; }
+    .banner .split-table, .amenity-grid, .split-inline { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+    <div class="logo-mark">
+      <svg viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg"><g fill="#F3EFFE"><circle cx="200" cy="180" r="160" /><polygon points="115,300 95,360 185,335" /><polygon points="180,330 320,385 320,365 180,310" /></g><rect x="155" y="115" width="100" height="160" fill="#2E2A4A" /><circle cx="240" cy="195" r="9" fill="#F3EFFE" /></svg>
+    </div>
+    <div>
+      <div class="brand-name">BojioVenue</div>
+      <div class="brand-sub">81 Tagore Lane #03-20, Singapore 787502</div>
+    </div>
+  </header>
+
+  <h1>Refund &amp; Cancellation Policy</h1>
+  <p class="intro">This is the same cancellation, postponement, and deposit policy already published in our FAQ — collected here as one clear reference. It applies to all Social Events and Corporate bookings. Last updated: 31 August 2026.</p>
+
+  <nav class="toc">
+    <div class="toc-title">Jump to a section</div>
+    <a href="#s1">1. Deposit & cleaning fee</a>
+    <a href="#s2">2. Cancellation</a>
+    <a href="#s3">3. Postponement</a>
+    <a href="#s4">4. Deposit deductions & forfeiture</a>
+    <a href="#s5">5. How refunds are paid</a>
+    <a href="#s6">6. Contact</a>
+  </nav>
+
+  <section class="rule-block" id="s1">
+    <h2>1. Deposit &amp; cleaning fee</h2>
+    <p>All bookings require a refundable security deposit and a one-time, non-refundable cleaning fee, paid together with full rental payment to confirm your booking:</p>
+    <div class="split-inline">
+      <div class="split-card">
+        <div class="lbl">Social Events</div>
+        <div class="val">$500 refundable deposit + $80 cleaning fee</div>
+      </div>
+      <div class="split-card">
+        <div class="lbl">Corporate</div>
+        <div class="val">$200 refundable deposit + $50 cleaning fee</div>
+      </div>
+    </div>
+    <p>The cleaning fee is not refundable under any circumstances, as it covers post-event servicing of the venue regardless of outcome.</p>
+  </section>
+
+  <section class="rule-block" id="s2">
+    <h2>2. Cancellation</h2>
+    <p>If you need to cancel your booking entirely, refunds of the <strong>rental fee</strong> are based on how far in advance you cancel, relative to your event date:</p>
+    <table class="fine-table">
+      <tr><td>More than 6 weeks before the event</td><td class="amt">Full refund of rental fee</td></tr>
+      <tr><td>3 to 6 weeks before the event</td><td class="amt">50% of rental fee forfeited</td></tr>
+      <tr><td>Less than 3 weeks before the event</td><td class="amt">No refund of rental fee</td></tr>
+    </table>
+    <p>The security deposit is handled separately — see Section 4.</p>
+  </section>
+
+  <section class="rule-block" id="s3">
+    <h2>3. Postponement</h2>
+    <p>If you'd rather move your event to a new date than cancel outright:</p>
+    <table class="fine-table">
+      <tr><td>More than 4 weeks before the event</td><td class="amt">One complimentary date change (subject to availability)</td></tr>
+      <tr><td>4 weeks or less before the event</td><td class="amt">$50 administrative fee applies</td></tr>
+    </table>
+  </section>
+
+  <section class="rule-block" id="s4">
+    <h2>4. Deposit deductions &amp; forfeiture</h2>
+    <p>Your $500 (or $200 for Corporate) security deposit is separate from the cancellation terms above and is refunded in full <strong>within 5 working days</strong> after your event — provided there is no damage, excessive cleaning required, house rule breaches, or unreturned keys.</p>
+    <p>Deductions from the deposit may apply for:</p>
+    <ul>
+      <li>Damage to equipment, furniture, or the venue</li>
+      <li>Excessive mess requiring additional cleaning beyond normal use</li>
+      <li>Unreturned keys or access devices</li>
+      <li>Fines and penalties for house rule breaches, as set out in our <a href="rules-8f2k.html">House Rules</a></li>
+    </ul>
+    <p>If the police or any enforcement authority is activated or attends the venue due to noise complaints, illegal activity, disorderly conduct, or any breach of the House Rules caused by the Host, guests, or vendors, the <strong>full security deposit is forfeited</strong> — regardless of how long the authorities were present or whether the event was allowed to continue. If total fines or charges exceed the deposit amount, the Host is required to pay the balance.</p>
+  </section>
+
+  <section class="rule-block" id="s5">
+    <h2>5. How refunds are paid</h2>
+    <p>Refunds are returned via the same payment method used for your original booking payment (e.g. bank transfer or PayNow), unless otherwise agreed with us in writing.</p>
+  </section>
+
+  <section class="rule-block" id="s6">
+    <h2>6. Contact</h2>
+    <p>Questions about a specific booking, cancellation, or your deposit? WhatsApp us at <strong>+65 8509 9176</strong> and we'll help directly.</p>
+  </section>
+
+  <footer class="contact">
+    Questions? WhatsApp us at <a href="https://wa.me/6585099176">+65 8509 9176</a>
+  </footer>
+
+</div>
+</body>
+</html>

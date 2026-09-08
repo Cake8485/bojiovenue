@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>BojioVenue — Privacy Policy</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --lavender: #F3EFFE;
+    --lavender-deep: #7B6FD6;
+    --coral: #FF8FAB;
+    --mint: #B5EDD5;
+    --ink: #2E2A4A;
+    --ink-soft: #5A5578;
+    --paper: #FFFFFF;
+    --warn-bg: #FFF4E0;
+    --warn-border: #F5A623;
+    --warn-ink: #8A5A00;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--lavender);
+    color: var(--ink);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 820px; margin: 0 auto; padding: 32px 20px 80px; }
+
+  header.top { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+  .logo-mark { width: 44px; height: 44px; border-radius: 12px; background: var(--ink); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .logo-mark svg { width: 28px; height: 28px; }
+  .brand-name { font-family: 'Plus Jakarta Sans', sans-serif; font-weight: 800; font-size: 20px; color: var(--ink); line-height: 1.1; }
+  .brand-sub { font-size: 12px; color: var(--ink-soft); letter-spacing: 0.02em; }
+
+  h1 { font-family: 'Plus Jakarta Sans', sans-serif; font-weight: 800; font-size: 34px; letter-spacing: -0.02em; margin: 28px 0 6px; color: var(--ink); }
+  .intro { font-size: 15px; color: var(--ink-soft); margin-bottom: 24px; max-width: 60ch; }
+
+  .banner {
+    background: var(--warn-bg);
+    border: 2px solid var(--warn-border);
+    border-radius: 16px;
+    padding: 20px 22px;
+    margin-bottom: 32px;
+  }
+  .banner .banner-title {
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-weight: 800;
+    font-size: 15px;
+    color: var(--warn-ink);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+  }
+  .banner p { font-size: 14.5px; color: #6B4600; margin-bottom: 8px; }
+  .banner p:last-child { margin-bottom: 0; }
+  .banner .split-table {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-top: 12px;
+  }
+  .banner .split-col {
+    background: rgba(255,255,255,0.55);
+    border-radius: 10px;
+    padding: 12px 14px;
+  }
+  .banner .split-col .split-label {
+    font-weight: 700;
+    font-size: 12.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--warn-ink);
+    margin-bottom: 4px;
+  }
+  .banner .split-col .split-val { font-size: 14px; color: #4A3200; }
+
+  nav.toc {
+    background: var(--paper);
+    border-radius: 16px;
+    padding: 18px 20px;
+    margin-bottom: 32px;
+  }
+  nav.toc .toc-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--lavender-deep); margin-bottom: 10px; }
+  nav.toc a {
+    display: block;
+    font-size: 14.5px;
+    color: var(--ink-soft);
+    text-decoration: none;
+    padding: 5px 0;
+    border-bottom: 1px dashed rgba(46,42,74,0.1);
+  }
+  nav.toc a:last-child { border-bottom: none; }
+  nav.toc a:hover { color: var(--lavender-deep); }
+
+  section.rule-block {
+    background: var(--paper);
+    border-radius: 18px;
+    padding: 24px 26px;
+    margin-bottom: 18px;
+    scroll-margin-top: 20px;
+  }
+  section.rule-block h2 {
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--lavender-deep);
+    margin-bottom: 12px;
+  }
+  section.rule-block p, section.rule-block li { font-size: 14.5px; color: var(--ink-soft); margin-bottom: 8px; }
+  section.rule-block ul { padding-left: 20px; margin: 6px 0 10px; }
+  section.rule-block li { margin-bottom: 4px; }
+  section.rule-block strong { color: var(--ink); }
+
+  .exception-tag {
+    display: inline-block;
+    background: var(--coral);
+    color: white;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    padding: 3px 9px;
+    border-radius: 999px;
+    margin-left: 8px;
+    vertical-align: middle;
+  }
+
+  .fine-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 10px 0 14px;
+    font-size: 14px;
+  }
+  .fine-table th {
+    text-align: left;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--lavender-deep);
+    padding: 6px 8px;
+    border-bottom: 1px solid rgba(46,42,74,0.12);
+  }
+  .fine-table td {
+    padding: 8px;
+    border-bottom: 1px solid rgba(46,42,74,0.07);
+    color: var(--ink-soft);
+  }
+  .fine-table tr:last-child td { border-bottom: none; }
+  .fine-table td.amt { color: var(--ink); font-weight: 700; text-align: right; }
+
+  .split-inline {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin: 10px 0 14px;
+  }
+  .split-inline .split-card {
+    background: var(--lavender);
+    border-radius: 10px;
+    padding: 12px 14px;
+  }
+  .split-inline .split-card .lbl { font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--lavender-deep); margin-bottom: 4px; }
+  .split-inline .split-card .val { font-size: 14px; color: var(--ink); }
+
+  .amenity-group { margin-bottom: 16px; }
+  .amenity-group h3 {
+    font-size: 13px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--ink);
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .amenity-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .amenity-item {
+    background: var(--mint);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 13.5px;
+    display: flex;
+    justify-content: space-between;
+  }
+  .amenity-item .price { font-weight: 700; }
+  .amenity-item.entertainment { background: #FFE0EA; }
+
+  footer.contact {
+    text-align: center;
+    padding: 24px 0 8px;
+    font-size: 13px;
+    color: var(--ink-soft);
+  }
+  footer.contact a { color: var(--lavender-deep); font-weight: 600; text-decoration: none; }
+
+  @media (max-width: 480px) {
+    h1 { font-size: 26px; }
+    .banner .split-table, .amenity-grid, .split-inline { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+    <div class="logo-mark">
+      <svg viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg"><g fill="#F3EFFE"><circle cx="200" cy="180" r="160" /><polygon points="115,300 95,360 185,335" /><polygon points="180,330 320,385 320,365 180,310" /></g><rect x="155" y="115" width="100" height="160" fill="#2E2A4A" /><circle cx="240" cy="195" r="9" fill="#F3EFFE" /></svg>
+    </div>
+    <div>
+      <div class="brand-name">BojioVenue</div>
+      <div class="brand-sub">81 Tagore Lane #03-20, Singapore 787502</div>
+    </div>
+  </header>
+
+  <h1>Privacy Policy</h1>
+  <p class="intro">This explains what personal data BojioVenue collects when you use this website or enquire about a booking, why we collect it, and how you can exercise your rights under Singapore's Personal Data Protection Act (PDPA). Last updated: 31 August 2026.</p>
+
+  <nav class="toc">
+    <div class="toc-title">Jump to a section</div>
+    <a href="#s1">1. Who we are</a>
+    <a href="#s2">2. What personal data we collect</a>
+    <a href="#s3">3. How we collect it</a>
+    <a href="#s4">4. Why we collect it</a>
+    <a href="#s5">5. Who we share it with</a>
+    <a href="#s6">6. Cookies</a>
+    <a href="#s7">7. How long we keep it</a>
+    <a href="#s8">8. How we protect it</a>
+    <a href="#s9">9. Your rights under the PDPA</a>
+    <a href="#s10">10. Children's data</a>
+    <a href="#s11">11. Changes to this policy</a>
+    <a href="#s12">12. Contact us</a>
+  </nav>
+
+  <section class="rule-block" id="s1">
+    <h2>1. Who we are</h2>
+    <p>BojioVenue is an event venue at 81 Tagore Lane #03-20, Singapore 787502, operated by Novan Management (UEN: 53513299M). References to "we", "us" or "our" in this policy mean Novan Management trading as BojioVenue.</p>
+    <p>We are a small, owner-operated business — there is no separate customer database, CRM, or marketing platform behind this website. Enquiries are handled directly by the venue operator over WhatsApp.</p>
+  </section>
+
+  <section class="rule-block" id="s2">
+    <h2>2. What personal data we collect</h2>
+    <p>We only collect what we need to respond to your enquiry and manage your booking:</p>
+    <ul>
+      <li><strong>Your name</strong></li>
+      <li><strong>Your WhatsApp/phone number</strong></li>
+      <li><strong>Event details you choose to share</strong> — event type, estimated guest count, preferred date and time</li>
+      <li><strong>Booking and payment records</strong> for confirmed bookings, kept for accounting and dispute-resolution purposes</li>
+    </ul>
+    <p>We do not ask for or collect NRIC numbers, payment card details, or any sensitive personal data through this website. We do not require you to create an account or log in to use this site.</p>
+  </section>
+
+  <section class="rule-block" id="s3">
+    <h2>3. How we collect it</h2>
+    <p><strong>The "Send an Enquiry" form on this website does not transmit any data to us directly or store anything on our servers.</strong> When you fill it in and press "Send via WhatsApp", your browser builds a pre-filled WhatsApp message from what you typed and opens WhatsApp on your own device. Nothing is sent to us — and nothing is collected by this website — unless and until you personally press Send inside WhatsApp.</p>
+    <p>Beyond that, we collect personal data when you:</p>
+    <ul>
+      <li>Message us directly on WhatsApp to enquire or book</li>
+      <li>Provide details when confirming a booking (for the booking agreement and receipt)</li>
+    </ul>
+    <p>Any information exchanged over WhatsApp is also subject to WhatsApp's (Meta's) own privacy policy, since WhatsApp is a third-party messaging platform we don't control.</p>
+  </section>
+
+  <section class="rule-block" id="s4">
+    <h2>4. Why we collect it</h2>
+    <p>We use your personal data only to:</p>
+    <ul>
+      <li>Respond to your booking enquiry</li>
+      <li>Confirm, schedule, and manage your event booking</li>
+      <li>Contact you about your booking (e.g. confirmations, reminders, changes)</li>
+      <li>Issue receipts and keep records required for accounting purposes</li>
+      <li>Resolve disputes relating to a booking (e.g. deposit deductions, damage claims)</li>
+    </ul>
+    <p>We do not use your data for unrelated marketing without your separate consent, and we do not sell or rent personal data to any third party.</p>
+  </section>
+
+  <section class="rule-block" id="s5">
+    <h2>5. Who we share it with</h2>
+    <p>We do not share your personal data with third parties for their own marketing purposes. Your data may pass through or be visible to:</p>
+    <ul>
+      <li><strong>WhatsApp (Meta Platforms)</strong> — as the messaging service used to communicate with you</li>
+      <li><strong>Payment channels</strong> (e.g. bank transfer, PayNow) you personally choose to use to pay your deposit or booking fee — governed by your bank's own privacy practices</li>
+    </ul>
+    <p>We do not use any third-party analytics, advertising, or tracking services on this website (see our <a href="cookie-policy.html">Cookie Policy</a> for details).</p>
+  </section>
+
+  <section class="rule-block" id="s6">
+    <h2>6. Cookies</h2>
+    <p>This website does not set any tracking, analytics, or advertising cookies. Full details are in our <a href="cookie-policy.html">Cookie Policy</a>.</p>
+  </section>
+
+  <section class="rule-block" id="s7">
+    <h2>7. How long we keep it</h2>
+    <p>Enquiry details for bookings that don't proceed are not retained beyond what's needed to respond to you. For confirmed bookings, we keep booking and payment records for as long as reasonably necessary for accounting, tax, and dispute-resolution purposes, consistent with our obligations under Singapore law.</p>
+  </section>
+
+  <section class="rule-block" id="s8">
+    <h2>8. How we protect it</h2>
+    <p>This website is served over HTTPS (encrypted connection). Since we don't operate a customer database, most of your data lives inside WhatsApp itself, protected by WhatsApp's own end-to-end encryption and security measures. Booking records we keep personally (e.g. for accounting) are kept only as long as necessary and are not shared beyond what's described in this policy.</p>
+  </section>
+
+  <section class="rule-block" id="s9">
+    <h2>9. Your rights under the PDPA</h2>
+    <p>Under Singapore's Personal Data Protection Act, you have the right to:</p>
+    <ul>
+      <li><strong>Ask what personal data we hold about you</strong></li>
+      <li><strong>Ask us to correct inaccurate personal data</strong></li>
+      <li><strong>Withdraw your consent</strong> to our collection, use, or disclosure of your personal data (which may affect our ability to process an active booking)</li>
+    </ul>
+    <p>To exercise any of these rights, contact us using the details in Section 12 below.</p>
+  </section>
+
+  <section class="rule-block" id="s10">
+    <h2>10. Children's data</h2>
+    <p>This website and our booking process are intended for use by adults arranging event bookings. We do not knowingly collect personal data directly from children. Event guest lists (e.g. birthday parties for children) may include children's first names or ages shared by the adult Host — this is provided by the Host for event-planning purposes only and is not otherwise collected or retained by us.</p>
+  </section>
+
+  <section class="rule-block" id="s11">
+    <h2>11. Changes to this policy</h2>
+    <p>We may update this policy from time to time, for example if we start using a new tool or service that affects your data. The "last updated" date at the top of this page will reflect the most recent change. Material changes will be reflected here before they take effect.</p>
+  </section>
+
+  <section class="rule-block" id="s12">
+    <h2>12. Contact us</h2>
+    <p>For any questions about this Privacy Policy or your personal data, contact Kenneth Lu (BojioVenue) via WhatsApp at <strong>+65 8509 9176</strong>.</p>
+  </section>
+
+  <footer class="contact">
+    Questions? WhatsApp us at <a href="https://wa.me/6585099176">+65 8509 9176</a>
+  </footer>
+
+</div>
+</body>
+</html>
