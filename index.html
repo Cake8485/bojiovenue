@@ -526,6 +526,78 @@
       line-height: 1.7;
     }
 
+    /* ─── REVIEWS ─── */
+    .reviews-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 20px;
+      margin-top: 48px;
+    }
+
+    .review-card {
+      background: #ffffff;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 28px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .review-head {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .review-avatar {
+      flex-shrink: 0;
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-weight: 700;
+      font-size: 16px;
+      color: #3D2875;
+    }
+
+    .review-name-block { min-width: 0; }
+
+    .review-name {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .review-stars {
+      font-size: 13px;
+      color: #FF8FAB;
+      letter-spacing: 1px;
+    }
+
+    .review-quote {
+      font-size: 14px;
+      color: var(--muted);
+      line-height: 1.7;
+      white-space: pre-line;
+    }
+
+    .review-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: auto;
+      padding-top: 8px;
+    }
+
     /* ─── SPACES ─── */
     .spaces-section { background: var(--surface); }
 
@@ -1431,6 +1503,71 @@
         <a class="btn-primary" href="https://wa.me/6585099176?text=Hi%20BoJioVenue!%20I%20watched%20your%20video%20and%20I%27m%20interested%20to%20book.%20Please%20share%20availability." target="_blank" rel="noopener">
           📲 Book After Watching
         </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- REVIEWS -->
+  <section id="reviews" aria-label="What our customers say" style="background: var(--surface);">
+    <div class="container">
+      <p class="section-label">Reviews</p>
+      <h2 class="section-title">What people say.</h2>
+      <p class="section-body">Real reviews from real bookings, straight from Google — nothing written by us.</p>
+
+      <div class="reviews-grid">
+
+        <div class="review-card">
+          <div class="review-head">
+            <div class="review-avatar" style="background: var(--amber);">E</div>
+            <div class="review-name-block">
+              <div class="review-name">Eng Kian An</div>
+              <div class="review-stars">★★★★★</div>
+            </div>
+          </div>
+          <p class="review-quote">"I had a wonderful experience with BojioVenue! The venue is clean, spacious, and well-maintained... What impressed me the most was the shop owner's professionalism. They are highly responsive, reliable, and trustworthy throughout the entire booking process."</p>
+          <div class="review-badge">🔎 Google review</div>
+        </div>
+
+        <div class="review-card">
+          <div class="review-head">
+            <div class="review-avatar" style="background: var(--purple-light);">A</div>
+            <div class="review-name-block">
+              <div class="review-name">Ayu Ahmad</div>
+              <div class="review-stars">★★★★★</div>
+            </div>
+          </div>
+          <p class="review-quote">"Such a cool venue! I loved the karaoke room, and the second floor was also a lovely space to hang out, play pool and chat with friends; it felt like the kind of place you see in the movies 😅 ...The venue was clean, and the main hall was spacious yet cosy, comfortably accommodating around 60–70 people seated."</p>
+          <div class="review-badge">🔎 Google review</div>
+        </div>
+
+        <div class="review-card">
+          <div class="review-head">
+            <div class="review-avatar" style="background: var(--amber-light);">L</div>
+            <div class="review-name-block">
+              <div class="review-name">Lim Chee Seong</div>
+              <div class="review-stars">★★★★★</div>
+            </div>
+          </div>
+          <p class="review-quote">"We booked BojioVenue for our baby's 100-day celebration and had a great experience... What impressed us most was how baby-friendly the venue is. The infant station, especially the dedicated diaper-changing stand, was very thoughtful and convenient for families with young babies."</p>
+          <div class="review-badge">🔎 Google review</div>
+        </div>
+
+        <div class="review-card">
+          <div class="review-head">
+            <div class="review-avatar" style="background: var(--purple);">M</div>
+            <div class="review-name-block">
+              <div class="review-name">Marlena Samsam</div>
+              <div class="review-stars">★★★★☆</div>
+            </div>
+          </div>
+          <p class="review-quote">"Thank you, BojioVenue, for the great space! 🤍 Our Recharge Day went well overall. The space was nice, cosy and comfortable, and everyone had a great time... Overall, we really enjoyed the space and appreciate the hospitality! 😊"</p>
+          <div class="review-badge">🔎 Google review</div>
+        </div>
+
+      </div>
+
+      <div style="text-align:center;margin-top:32px;">
+        <a class="btn-secondary" href="https://www.google.com/maps/place/BojioVenue/@1.3872542,103.8291726,17z/data=!4m8!3m7!1s0x31da16b14fbfffff:0x3488420fcf0c1a7c!8m2!3d1.3872542!4d103.8291726!9m1!1b1!16s%2Fg%2F11hzsvpj3w" target="_blank" rel="noopener">Read all reviews on Google</a>
       </div>
     </div>
   </section>
