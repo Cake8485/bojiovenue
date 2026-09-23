@@ -1230,6 +1230,33 @@
       .events-grid { grid-template-columns: 1fr 1fr; }
     }
   </style>
+
+  <!-- ===== Analytics: Google tag with Consent Mode (default: denied until visitor accepts) ===== -->
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('consent', 'default', {
+      'analytics_storage': 'denied',
+      'ad_storage': 'denied',
+      'ad_user_data': 'denied',
+      'ad_personalization': 'denied',
+      'wait_for_update': 500
+    });
+    (function(){
+      try {
+        if (localStorage.getItem('bv_consent') === 'granted') {
+          gtag('consent', 'update', { 'analytics_storage': 'granted' });
+        }
+      } catch (e) {}
+    })();
+    gtag('js', new Date());
+    gtag('config', 'G-H1GK5CF91Y', {
+      'site_version': 'v2026-09',
+      'anonymize_ip': true
+    });
+  </script>
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-H1GK5CF91Y"></script>
+  <!-- ===== END Analytics head ===== -->
 </head>
 <body>
 
@@ -1263,7 +1290,7 @@
   </div>
 
   <!-- HERO -->
-  <section class="hero" aria-label="Hero">
+  <section data-track-section="hero" class="hero" aria-label="Hero">
     <div class="hero-slides" id="heroSlides">
       <div class="hero-slide active" style="background-image:url('social-gathering.png')" role="img" aria-label="Live band social gathering at BoJioVenue"></div>
       <div class="hero-slide" style="background-image:url('full-month.png')" role="img" aria-label="Full month celebration at BoJioVenue with 80 guests"></div>
@@ -1303,7 +1330,7 @@
   </section>
 
   <!-- WHY BOJIOVENUE -->
-  <section id="why" aria-label="Why choose BoJioVenue">
+  <section data-track-section="why" id="why" aria-label="Why choose BoJioVenue">
     <div class="container">
       <p class="section-label">Why BoJioVenue</p>
       <h2 class="section-title">Everything in one space.<br />Nothing you don't need.</h2>
@@ -1344,7 +1371,7 @@
   </section>
 
   <!-- THE SPACE -->
-  <section id="spaces" class="spaces-section" aria-label="Our event spaces">
+  <section data-track-section="spaces" id="spaces" class="spaces-section" aria-label="Our event spaces">
     <div class="container">
       <p class="section-label">The Space</p>
       <h2 class="section-title">Three zones.<br />One venue.</h2>
@@ -1401,7 +1428,7 @@
   </section>
 
   <!-- EVENTS -->
-  <section id="events" aria-label="Types of events at BoJioVenue">
+  <section data-track-section="events" id="events" aria-label="Types of events at BoJioVenue">
     <div class="container">
       <p class="section-label">Perfect For</p>
       <h2 class="section-title">Any occasion.<br />Any vibe.</h2>
@@ -1464,7 +1491,7 @@
   </section>
 
   <!-- GALLERY -->
-  <section id="gallery" class="gallery-section" aria-label="BoJioVenue photo gallery">
+  <section data-track-section="gallery" id="gallery" class="gallery-section" aria-label="BoJioVenue photo gallery">
     <div class="container">
       <p class="section-label">Gallery</p>
       <h2 class="section-title">See the space.</h2>
@@ -1483,7 +1510,7 @@
   </section>
 
   <!-- VIDEO TOUR -->
-  <section id="video-tour" aria-label="BoJioVenue video tour" style="background: var(--surface);">
+  <section data-track-section="video_tour" id="video-tour" aria-label="BoJioVenue video tour" style="background: var(--surface);">
     <div class="container">
       <p class="section-label">Video Tour</p>
       <h2 class="section-title">See it before you book.</h2>
@@ -1508,7 +1535,7 @@
   </section>
 
   <!-- REVIEWS -->
-  <section id="reviews" aria-label="What our customers say" style="background: var(--surface);">
+  <section data-track-section="reviews" id="reviews" aria-label="What our customers say" style="background: var(--surface);">
     <div class="container">
       <p class="section-label">Reviews</p>
       <h2 class="section-title">What people say.</h2>
@@ -1573,7 +1600,7 @@
   </section>
 
   <!-- PRICING -->
-  <section id="pricing" aria-label="BoJioVenue pricing and rates">
+  <section data-track-section="pricing" id="pricing" aria-label="BoJioVenue pricing and rates">
     <div class="container">
       <p class="section-label">Pricing</p>
       <h2 class="section-title">Simple, transparent rates.</h2>
@@ -1695,7 +1722,7 @@
   </section>
 
   <!-- FAQ -->
-  <section id="faq" class="faq-section" aria-label="Frequently asked questions">
+  <section data-track-section="faq" id="faq" class="faq-section" aria-label="Frequently asked questions">
     <div class="container">
       <p class="section-label">FAQ</p>
       <h2 class="section-title">Got questions?<br />We've got answers.</h2>
@@ -1831,7 +1858,7 @@
   </section>
 
   <!-- GETTING HERE -->
-  <section id="getting-here" aria-label="How to get to BoJioVenue">
+  <section data-track-section="getting_here" id="getting-here" aria-label="How to get to BoJioVenue">
     <div class="container">
       <p class="section-label">Getting Here</p>
       <h2 class="section-title">Find us at<br />81 Tagore Lane.</h2>
@@ -1888,7 +1915,7 @@
   </section>
 
   <!-- CONTACT -->
-  <section id="contact" aria-label="Contact BoJioVenue">
+  <section data-track-section="contact" id="contact" aria-label="Contact BoJioVenue">
     <div class="container">
       <p class="section-label">Get in Touch</p>
       <h2 class="section-title">Ready to host?<br />Let's make it happen.</h2>
@@ -2036,6 +2063,7 @@
             <li><a href="terms-conditions.html">Terms &amp; Conditions</a></li>
             <li><a href="cookie-policy.html">Cookie Policy</a></li>
             <li><a href="refund-policy.html">Refund &amp; Cancellation Policy</a></li>
+            <li><a href="#" onclick="if(window.bvOpenConsent){bvOpenConsent();}return false;">Cookie settings</a></li>
           </ul>
         </div>
       </div>
@@ -2127,5 +2155,117 @@
       window.open(`https://wa.me/6585099176?text=${encodeURIComponent(text)}`, '_blank');
     }
   </script>
+
+  <!-- ===== Cookie consent banner ===== -->
+  <style>
+    .bv-consent{position:fixed;left:16px;right:16px;bottom:16px;z-index:9998;background:#fff;border:1px solid var(--border);border-radius:16px;padding:16px 18px;box-shadow:0 12px 32px rgba(61,40,117,0.18);display:none;gap:14px;align-items:center;flex-wrap:wrap;font-family:'DM Sans',sans-serif;max-width:720px;margin:0 auto}
+    .bv-consent.show{display:flex}
+    .bv-consent p{margin:0;font-size:13.5px;line-height:1.5;color:var(--text);flex:1 1 280px}
+    .bv-consent p a{color:var(--purple);text-decoration:underline}
+    .bv-consent .bv-actions{display:flex;gap:8px;flex:0 0 auto}
+    .bv-consent button{font-family:'Plus Jakarta Sans',sans-serif;font-weight:700;font-size:13.5px;padding:10px 16px;border-radius:10px;cursor:pointer;border:1px solid var(--border)}
+    .bv-consent .bv-accept{background:#FF8FAB;color:#3D2875;border-color:#FF8FAB}
+    .bv-consent .bv-decline{background:#fff;color:var(--muted)}
+    .bv-consent button:focus-visible{outline:3px solid var(--text);outline-offset:2px}
+    @media (max-width:480px){.bv-consent{left:10px;right:10px;bottom:10px;padding:14px}.bv-consent .bv-actions{width:100%}.bv-consent button{flex:1}}
+  </style>
+  <div class="bv-consent" id="bvConsent" role="dialog" aria-live="polite" aria-label="Cookie consent">
+    <p>We use Google Analytics to see which parts of this site people find useful. It sets a cookie only if you allow it. See our <a href="cookie-policy.html">Cookie Policy</a>.</p>
+    <div class="bv-actions">
+      <button type="button" class="bv-decline" id="bvDecline">Decline</button>
+      <button type="button" class="bv-accept" id="bvAccept">Allow analytics</button>
+    </div>
+  </div>
+
+  <!-- ===== Analytics events (scroll depth, section views, CTA + WhatsApp clicks) ===== -->
+  <script>
+  (function(){
+    'use strict';
+    var track = function(name, params){
+      try { if (typeof gtag === 'function') gtag('event', name, params || {}); } catch(e){}
+    };
+    var pagePath = location.pathname || '/';
+
+    // ---- Consent banner ----
+    var banner = document.getElementById('bvConsent');
+    var stored = null;
+    try { stored = localStorage.getItem('bv_consent'); } catch(e){}
+    function setConsent(v){
+      try { localStorage.setItem('bv_consent', v); } catch(e){}
+      if (v === 'granted') { try { gtag('consent','update',{'analytics_storage':'granted'}); } catch(e){} }
+      if (banner) banner.classList.remove('show');
+      track('consent_choice', { choice: v });
+    }
+    if (banner && !stored) banner.classList.add('show');
+    var acc = document.getElementById('bvAccept'), dec = document.getElementById('bvDecline');
+    if (acc) acc.addEventListener('click', function(){ setConsent('granted'); });
+    if (dec) dec.addEventListener('click', function(){ setConsent('denied'); });
+    window.bvOpenConsent = function(){ if (banner) banner.classList.add('show'); };
+
+    // ---- Scroll depth: 25 / 50 / 75 / 90, once each ----
+    var marks = [25,50,75,90], fired = {};
+    function onScroll(){
+      var doc = document.documentElement;
+      var max = (doc.scrollHeight - window.innerHeight);
+      if (max <= 0) return;
+      var pct = Math.round((window.scrollY / max) * 100);
+      for (var i=0;i<marks.length;i++){
+        var m = marks[i];
+        if (pct >= m && !fired[m]) { fired[m] = true; track('scroll_depth', { percent: m, page_path: pagePath }); }
+      }
+    }
+    window.addEventListener('scroll', onScroll, { passive: true });
+    setTimeout(onScroll, 1500);
+
+    // ---- Section views: 50% visible, once each ----
+    var seen = {};
+    if ('IntersectionObserver' in window) {
+      var io = new IntersectionObserver(function(entries){
+        entries.forEach(function(en){
+          if (!en.isIntersecting) return;
+          var name = en.target.getAttribute('data-track-section');
+          if (name && !seen[name]) { seen[name] = true; track('section_view', { section_name: name, page_path: pagePath }); }
+        });
+      }, { threshold: 0.5 });
+      document.querySelectorAll('[data-track-section]').forEach(function(el){ io.observe(el); });
+    }
+
+    // ---- CTA + WhatsApp clicks ----
+    function sectionOf(el){
+      var s = el.closest('[data-track-section]');
+      if (s) return s.getAttribute('data-track-section');
+      if (el.closest('nav') || el.closest('.mobile-menu')) return 'nav';
+      if (el.closest('footer')) return 'footer';
+      if (el.classList.contains('wa-float')) return 'floating';
+      return 'other';
+    }
+    function ctaId(el){
+      var t = (el.getAttribute('aria-label') || el.textContent || '').replace(/\s+/g,' ').trim().toLowerCase();
+      return t.replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'').slice(0,40) || 'unnamed';
+    }
+    document.addEventListener('click', function(e){
+      var a = e.target.closest('a, button');
+      if (!a) return;
+      var href = a.getAttribute('href') || '';
+      var isCta = a.matches('.btn-primary, .btn-secondary, .nav-cta, .mob-cta, .wa-float');
+      var isWa = /wa\.me|api\.whatsapp\.com/i.test(href);
+      var loc = sectionOf(a);
+      if (isCta) track('cta_click', { cta_id: ctaId(a), cta_location: loc, page_path: pagePath });
+      if (isWa) track('contact_click', { method: 'whatsapp', cta_location: loc, page_path: pagePath });
+    }, true);
+
+    // ---- Enquiry form (opens WhatsApp) counts as contact_click too ----
+    if (typeof window.sendEnquiry === 'function') {
+      var _orig = window.sendEnquiry;
+      window.sendEnquiry = function(){
+        var cb = document.getElementById('consent');
+        if (cb && !cb.checked) return _orig.apply(this, arguments);
+        track('contact_click', { method: 'whatsapp_form', cta_location: 'contact', page_path: pagePath });
+        return _orig.apply(this, arguments);
+      };
+    }
+  })();
+  </script>
+  <!-- ===== END Analytics events ===== -->
 </body>
 </html>
