@@ -10,7 +10,10 @@ compatibility_flags = ["nodejs_compat"]
 # runtime) rather than base64-encoding them into source — smaller, no runtime
 # decode cost. See src/assets.js.
 rules = [
-  { type = "Data", globs = ["**/*.ttf", "**/*.png"], fallthrough = true }
+  { type = "Data", globs = ["**/*.ttf", "**/*.png"], fallthrough = true },
+  # The business dashboard's UI (src/dashboard/*) is plain HTML/CSS/JS source imported
+  # as text — see src/dashboard.js for why the JS/CSS parts use a .txt extension.
+  { type = "Text", globs = ["**/*.html", "**/*.txt"], fallthrough = true }
 ]
 
 # ---------------------------------------------------------------------------

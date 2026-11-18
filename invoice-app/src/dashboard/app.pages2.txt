@@ -1,0 +1,245 @@
+/* ==========================================================================
+   Pages, part 2 — Clients, Calendar, Reports, Settings, Help — plus every action
+   (drawers, forms, filters). ACT handlers are wired by app.core.txt's click listener.
+   ========================================================================== */
+const goto = (id) => { if (location.hash === '#/' + id) route(); else location.hash = '#/' + id; };
+
+/* ---------- Clients ---------- */
+REGIONS.clients = () => {
+  const q = S.f.clients.q.trim().toLowerCase();
+  const rows = S.data.clients.filter((c) => !q || [c.name, ...c.aliases].join(' ').toLowerCase().includes(q));
+  return table('cli', [
+    { k: 'name', label: 'Client', sort: (c) => c.name.toLowerCase(), f: (c) => h`<b>${c.name}</b>${c.repeat ? raw(' <span class="pill brand">repeat</span>') : ''}<span class="sub">${c.kind}</span>` },
+    { k: 'n', label: 'Bookings', r: 1, sort: (c) => c.bookings, f: (c) => c.bookings },
+    { k: 'rev', label: 'Revenue', r: 1, sort: (c) => c.revenue, f: (c) => (c.priced_count ? money(c.revenue) + (c.priced_count < c.bookings ? '+' : '') : h`<span class="muted" data-tip="No amounts recorded for this client">—</span>`) },
+    { k: 'last', label: 'Last event', sort: (c) => c.last || '', f: (c) => (c.last ? fmtDate(c.last) : '—') },
+    { k: 'next', label: 'Next event', sort: (c) => c.next || '9999', f: (c) => (c.next ? h`<b>${fmtDate(c.next)}</b>` : '—') },
+  ], rows, { rowAct: 'client-open', empty: emptyState('No clients match', '') });
+};
+PAGES.clients = () => {
+  const d = S.data, cl = d.clients, rep = cl.filter((c) => c.repeat);
+  return h`${head('Clients', `${plural(cl.length, 'client')} · built from every confirmed booking`, cta('Record booking', 'Add a client', 'plus', 'add-booking'))}
+    <div class="grid kpis">
+      ${kpi('Clients', 'users', cl.length, `${plural(sumBy(cl, (c) => c.bookings), 'booking')} in total`)}
+      ${kpi('Repeat clients', 'refresh', rep.length, cl.length ? `${Math.round((rep.length / cl.length) * 100)}% book again` : '—', 'pos')}
+      ${kpi('Upcoming', 'cal', cl.filter((c) => c.next).length, 'clients with a booking ahead')}
+    </div>
+    <div class="card"><div class="toolbar"><input type="search" placeholder="Search clients" value="${S.f.clients.q}" data-filter="clients.q" aria-label="Search clients"></div>
+      <div class="card-b"><div id="reg-clients">${REGIONS.clients()}</div></div></div>
+    <p class="muted" style="font-size:12.5px;margin:12px 4px">Names are matched across sources (the accounts, the invoice app and the Lead Manager spell people differently), so one person is one row. Revenue shows “+” when some of that client’s bookings have no amounts recorded.</p>`;
+};
+ACT['client-open'] = (el) => {
+  const name = el.dataset.key || el.dataset.name, c = S.data.clients.find((x) => x.name === name); if (!c) return;
+  const msg = `Hi ${firstName(c.name)}, thanks for choosing BoJioVenue! 😊`;
+  openDrawer({ title: c.name, body: h`<dl class="kv"><dt>Bookings</dt><dd>${c.bookings}${c.repeat ? raw(' <span class="pill brand">repeat client</span>') : ''}</dd><dt>Revenue</dt><dd>${c.priced_count ? money(c.revenue) : 'not recorded'}</dd>
+      <dt>Last event</dt><dd>${fmtDate(c.last)}</dd><dt>Next event</dt><dd>${c.next ? fmtDate(c.next) : '—'}</dd>${c.aliases.length ? h`<dt>Also written as</dt><dd>${c.aliases.join(', ')}</dd>` : ''}</dl>
+      <div class="label" style="margin:22px 0 6px">History</div>${table('cli-h', [{ k: 'd', label: 'Date', f: (e) => fmtDate(e.date) }, { k: 'p', label: 'Event', f: (e) => e.purpose || e.kind }, { k: 'r', label: 'Revenue', r: 1, f: (e) => (e.revenue == null ? '—' : money(e.revenue)) }], c.events.slice().reverse())}`,
+    footer: c.phone ? h`<a class="btn" data-native="1" target="_blank" rel="noopener" href="${waLink(c.phone, msg)}">${ico('wa')}WhatsApp</a>` : '' });
+};
+
+/* ---------- Calendar ---------- */
+const isoDow = (iso) => new Date(iso + 'T00:00:00Z').getUTCDay();
+const addDay = (iso, k) => new Date(Date.parse(iso + 'T00:00:00Z') + k * 86400000).toISOString().slice(0, 10);
+const isPremium = (iso) => { const w = isoDow(iso), H = S.data.holidays; return w === 5 || w === 6 || w === 0 || H.includes(iso) || H.includes(addDay(iso, 1)); };
+PAGES.calendar = () => {
+  const d = S.data, { y, m } = S.cal, mm = String(m).padStart(2, '0'), ym = `${y}-${mm}`;
+  const dow = (new Date(Date.UTC(y, m - 1, 1)).getUTCDay() + 6) % 7, dim = new Date(Date.UTC(y, m, 0)).getUTCDate(), rows = Math.ceil((dow + dim) / 7);
+  const start = addDay(`${ym}-01`, -dow), byDate = {};
+  d.calendar.forEach((e) => { (byDate[e.date] = byDate[e.date] || []).push(e); });
+  let cells = '';
+  for (let i = 0; i < rows * 7; i++) {
+    const iso = addDay(start, i), inMonth = iso.startsWith(ym), ev = byDate[iso] || [], ph = d.holidays.includes(iso);
+    cells += h`<div class="cal-day ${inMonth ? '' : 'off'} ${iso === d.today ? 'today' : ''} ${inMonth && isPremium(iso) ? 'prem' : ''}"><div class="dn"><span>${iso === d.today ? raw(`<b>${+iso.slice(8)}</b>`) : +iso.slice(8)}</span>${ph ? raw('<span class="ph">PH</span>') : ''}</div>
+      ${ev.slice(0, 3).map((e) => h`<button class="cal-chip ${e.state} ${e.collision ? 'collision' : ''}" data-act="cal-chip" data-key="${e.key}" data-tip="${e.client}${e.time ? ' · ' + e.time : ''}${e.collision ? '\nCheck: two bookings on this date' : ''}">${e.time ? e.time.slice(0, 5) + ' ' : ''}${e.client}</button>`)}
+      ${ev.length > 3 ? h`<button class="cal-chip confirmed" data-act="cal-day" data-date="${iso}">+${ev.length - 3} more</button>` : ''}</div>`.s;
+  }
+  const upcoming = d.calendar.filter((e) => e.date >= d.today && e.state !== 'tentative').slice(0, 8);
+  const inMonthEvents = d.calendar.filter((e) => e.date.startsWith(ym) && e.state !== 'tentative');
+  return h`${head('Confirmed Booking Calendar', `${plural(d.summary.upcoming_events, 'upcoming booking')} · premium days shaded · PH = public holiday`, cta('Record booking', 'Add a booking', 'plus', 'add-booking'))}
+    <div class="card"><div class="cal-head"><h2>${MONTHS[m - 1]} ${y}</h2><span class="label">${plural(inMonthEvents.length, 'booking')}</span>
+      <button class="btn btn-icon sm" data-act="cal-prev" aria-label="Previous month"><span style="display:inline-block;transform:rotate(180deg)">${ico('chev')}</span></button>
+      <button class="btn sm" data-act="cal-today">Today</button><button class="btn btn-icon sm" data-act="cal-next" aria-label="Next month">${ico('chev')}</button></div>
+      <div class="cal-grid">${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((x) => h`<div class="cal-dow">${x}</div>`)}${raw(cells)}</div>
+      <div class="cal-legend"><span class="pill pos">Signed</span><span class="pill amber">Awaiting signature</span><span class="pill brand">Confirmed (Lead Manager / accounts)</span><span class="pill dash">Soft book</span><span class="pill neg">Red outline = two bookings, one date</span></div></div>
+    <div class="card" style="margin-top:14px"><div class="card-h"><h2>Coming up</h2></div><div class="card-b">${upcoming.length ? table('cal-up', [
+      { k: 'd', label: 'Date', f: (e) => fmtDate(e.date) }, { k: 'c', label: 'Client', f: (e) => h`${e.client}${e.collision ? raw(' <span class="pill neg">clash</span>') : ''}` }, { k: 't', label: 'Time', f: (e) => e.time || '—' },
+      { k: 'k', label: 'Type', f: (e) => e.kind }, { k: 's', label: 'Status', f: (e) => pill(stateText[e.state], stateTone[e.state]) }], upcoming, { rowAct: 'cal-date-row' }) : emptyState('Nothing booked ahead', 'Confirmed bookings appear here.')}</div></div>`;
+};
+const eventByKey = (key) => S.data.calendar.find((e) => e.key === key);
+function openEvent(e) {
+  if (!e) return;
+  const b = S.data.bookings.find((x) => x.key === e.key);
+  openDrawer({ title: e.client, body: h`<dl class="kv"><dt>Date</dt><dd>${fmtDate(e.date)}${S.data.holidays.includes(e.date) ? raw(' <span class="pill amber">Public holiday</span>') : ''}</dd><dt>Time</dt><dd>${e.time || '—'}${e.hours ? ` (${e.hours}h)` : ''}</dd>
+    <dt>Type</dt><dd>${e.kind}${e.purpose ? ' · ' + e.purpose : ''}</dd><dt>Status</dt><dd>${pill(stateText[e.state], stateTone[e.state])}</dd>
+    <dt>Source</dt><dd>${e.source === 'app' ? 'Invoice app' : e.source === 'ledger' ? 'Accounts workbook / entered by hand' : 'Lead Manager'}</dd>
+    <dt>Revenue</dt><dd>${e.revenue == null ? raw('<span class="muted">No amounts recorded</span>') : money(e.revenue)}</dd></dl>
+    ${e.collision ? h`<div class="banner" style="margin-top:16px">${ico('alert')}<span>Another booking is confirmed on this date — check it isn’t a double-booking.</span></div>` : ''}`,
+    footer: h`${b ? h`<button class="btn" data-act="booking-open" data-key="${b.key}">Open booking</button>` : h`<button class="btn" data-act="add-booking" data-date="${e.date}" data-client="${e.client}" data-purpose="${e.purpose || ''}">${ico('plus')}Record amounts</button>`}
+      <button class="btn" data-act="client-open" data-key="${(S.data.clients.find((c) => c.name === e.client || c.aliases.includes(e.client)) || {}).name || ''}">Client</button>` });
+}
+ACT['cal-chip'] = (el) => openEvent(eventByKey(el.dataset.key));
+ACT['cal-date-row'] = (el) => openEvent(eventByKey(el.dataset.key));
+ACT['cal-day'] = (el) => { const evs = S.data.calendar.filter((e) => e.date === el.dataset.date); openDrawer({ title: fmtDate(el.dataset.date), body: h`<div class="list">${evs.map((e) => h`<button class="item" data-act="cal-chip" data-key="${e.key}"><span class="ring"></span><span class="t">${e.client}</span><span class="m">${e.time || ''}</span></button>`)}</div>` }); };
+ACT['cal-date'] = (el) => { const date = el.dataset.arg; S.cal = { y: +date.slice(0, 4), m: +date.slice(5, 7) }; goto('calendar'); setTimeout(() => { const evs = S.data.calendar.filter((e) => e.date === date); if (evs.length === 1) openEvent(evs[0]); else if (evs.length) ACT['cal-day']({ dataset: { date } }); }, 30); };
+ACT['cal-prev'] = () => { S.cal = S.cal.m === 1 ? { y: S.cal.y - 1, m: 12 } : { y: S.cal.y, m: S.cal.m - 1 }; renderPage(); };
+ACT['cal-next'] = () => { S.cal = S.cal.m === 12 ? { y: S.cal.y + 1, m: 1 } : { y: S.cal.y, m: S.cal.m + 1 }; renderPage(); };
+ACT['cal-today'] = () => { const t = S.data.today; S.cal = { y: +t.slice(0, 4), m: +t.slice(5, 7) }; renderPage(); };
+
+/* ---------- Reports (also the print layout) ---------- */
+PAGES.reports = () => {
+  const r = range(), d = S.data, ms = monthsIn(r), t = totals(ms);
+  const bs = d.bookings.filter((b) => b.counted && inR(b.date, r)), dep = d.deposits.filter((x) => inR(x.date, r));
+  const top = d.clients.filter((c) => c.priced_count).slice(0, 5);
+  return h`${head('Reports', `${r.label} · ready to print or save as PDF`, cta('Print report', 'Save as PDF', 'print', 'print'))}
+    <div class="card noprint" style="margin-bottom:14px"><div class="card-b" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><span class="label" style="margin-right:6px">Download CSV</span>
+      ${[['pnl', 'Monthly P&L'], ['bookings', 'Bookings'], ['expenses', 'Expenses'], ['deposits', 'Deposits']].map((x) => h`<button class="btn sm" data-act="csv" data-kind="${x[0]}">${ico('dl')}${x[1]}</button>`)}</div></div>
+    <div class="card"><div class="card-b report">
+      <div class="label">${esc(d.business.entity || d.business.name)} · UEN ${esc(d.business.uen)}</div><h1>${d.business.name} — business report</h1>
+      <div class="muted">${r.label} · prepared ${fmtDate(d.today)}</div>
+      <div class="kp"><div><span class="label">Revenue</span><b>${money(t.revenue)}</b></div><div><span class="label">Costs</span><b>${t.anyCosts ? money(t.cost) : '—'}</b></div><div><span class="label">Net</span><b>${t.anyCosts ? money(t.net) + (t.incomplete ? '*' : '') : '—'}</b></div><div><span class="label">Bookings</span><b>${t.bookings}</b></div></div>
+      <h2>Profit & loss by month</h2>
+      ${table('rp-pl', [{ k: 'm', label: 'Month', f: (m) => fmtMonth(m.month) }, { k: 'b', label: 'Bookings', r: 1, f: (m) => m.bookings }, { k: 'r', label: 'Revenue', r: 1, f: (m) => money(m.revenue) },
+        { k: 'c', label: 'Costs', r: 1, f: (m) => (m.costs_recorded ? money(m.cost) : 'not tracked') }, { k: 'n', label: 'Net', r: 1, f: (m) => money(m.net) + (m.costs_recorded ? '' : '*') }], ms)}
+      <h2>Revenue make-up</h2><dl class="kv"><dt>Rental</dt><dd>${money(t.rental)}</dd><dt>Cleaning collected</dt><dd>${money(t.cleaning)}</dd><dt>Forfeits, top-ups, pet fees</dt><dd>${money(t.topups)}</dd></dl>
+      <h2>Deposits</h2><dl class="kv"><dt>Refunded</dt><dd>${money(sumBy(dep, (x) => x.refunded))}</dd><dt>Kept as income</dt><dd>${money(sumBy(dep, (x) => x.retained))}</dd><dt>Held right now</dt><dd>${money(sumBy(d.deposits.filter((x) => x.status === 'held'), (x) => x.collected))}</dd><dt>Still to collect</dt><dd>${money(d.summary.to_collect)}</dd></dl>
+      ${top.length ? h`<h2>Top clients (by recorded revenue)</h2>${table('rp-top', [{ k: 'n', label: 'Client', f: (c) => c.name }, { k: 'b', label: 'Bookings', r: 1, f: (c) => c.bookings }, { k: 'r', label: 'Revenue', r: 1, f: (c) => money(c.revenue) }], top)}` : ''}
+      <h2>What this report does not include</h2>
+      ${d.health.length ? h`<ul>${d.health.map((x) => h`<li><b>${x.title}.</b> ${x.detail}</li>`)}</ul>` : h`<p>Nothing is known to be missing.</p>`}
+      <p class="muted" style="font-size:12px">${bs.length} priced bookings counted. A security deposit is not revenue unless forfeited. Cleaning fees are revenue. Rent is nil. * costs not tracked for the month.</p></div></div>`;
+};
+
+/* ---------- Settings ---------- */
+const TPL = { agreement_send: ['Sending the agreement', 'The WhatsApp message that goes with the signing link'], after_sign_payment: ['After the client signs', 'Asks them to pay and send a screenshot'], booking_confirmed: ['Booking confirmed', 'Tells the client their date is blocked out'] };
+PAGES.settings = () => {
+  const d = S.data, b = d.business, s = d.sources;
+  setTimeout(loadTemplates, 0);
+  return h`${head('Settings', 'Appearance, data, messages', '')}
+    <div class="settings-grid">
+      <div class="card"><div class="card-h"><h2>Appearance</h2></div><div class="card-b"><p class="muted" style="margin-bottom:12px">Light is the everyday view. Glass is the same dashboard as frosted panels over a photo of the venue.</p>
+        <div class="seg" role="group" aria-label="Theme"><button aria-pressed="${S.theme === 'light'}" data-act="set-theme" data-v="light">Light</button><button aria-pressed="${S.theme === 'glass'}" data-act="set-theme" data-v="glass">Frosted glass</button></div></div></div>
+      <div class="card"><div class="card-h"><h2>Business</h2></div><div class="card-b"><dl class="kv"><dt>Name</dt><dd>${b.name}</dd><dt>Company</dt><dd>${b.entity} (UEN ${b.uen})</dd><dt>Operator</dt><dd>${b.operator}</dd><dt>Phone</dt><dd>${b.phone}</dd><dt>Email</dt><dd>${b.email}</dd><dt>Address</dt><dd>${b.address}</dd></dl>
+        <p class="muted" style="font-size:12.5px;margin-top:10px">Set in the Worker’s configuration, not here — ask Claude to change it.</p></div></div>
+      <div class="card"><div class="card-h"><h2>Data sources</h2></div><div class="card-b"><dl class="kv">
+        <dt>Invoice app</dt><dd>${plural(s.app_invoices, 'booking')} · live</dd><dt>Accounts workbook</dt><dd>${plural(s.ledger_bookings, 'booking')}, ${plural(s.ledger_deposits, 'deposit outcome')}</dd>
+        <dt>Expenses</dt><dd>${plural(s.expenses, 'entry', 'entries')}</dd><dt>Lead Manager</dt><dd>${plural(s.calendar_imports, 'confirmed booking')} (names and dates only)</dd>
+        <dt>Last import</dt><dd>${s.last_import ? fmtDate(s.last_import.slice(0, 10)) : 'never'}</dd></dl>
+        <p class="muted" style="font-size:12.5px;margin-top:10px">After Carine updates the workbooks, ask Claude to re-run the import — it refreshes these rows without touching anything typed into the dashboard.</p>
+        ${d.setup_warnings.length ? h`<div class="banner" style="margin-top:12px">${ico('alert')}<span>${d.setup_warnings.join(' · ')}</span></div>` : ''}</div></div>
+      <div class="card"><div class="card-h"><h2>Security</h2></div><div class="card-b"><p class="muted" style="margin-bottom:12px">This page is protected by your admin key, stored only in this browser. Sign out on any shared computer.</p>
+        <button class="btn" data-act="signout">${ico('logout')}Sign out</button></div></div>
+    </div>
+    <div class="card" style="margin-top:14px"><div class="card-h"><h2>WhatsApp messages</h2><span class="label">used by the “send” buttons in Telegram</span></div><div class="card-b" id="tpl-box"><p class="muted">Loading…</p></div></div>
+    <p class="muted" style="font-size:12.5px;margin:14px 4px">Dashboard v1 · built ${fmtDate(d.today)} · <a data-native="1" href="https://go.bojiovenue.com/admin" target="_blank" rel="noopener">Website traffic dashboard</a> · <a data-native="1" href="/admin" target="_blank" rel="noopener">Invoice admin</a></p>`;
+};
+async function loadTemplates() {
+  const box = $('#tpl-box'); if (!box) return;
+  try {
+    const { templates } = await api('templates'); const map = Object.fromEntries(templates.map((t) => [t.key, t.body]));
+    box.innerHTML = Object.keys(TPL).map((k) => h`<label class="field"><span>${TPL[k][0]} — ${TPL[k][1]}</span><textarea id="tpl-${k}" maxlength="1000">${map[k] || ''}</textarea><div><button class="btn sm" data-act="save-template" data-key="${k}">Save</button></div></label>`.s).join('');
+  } catch (e) { box.innerHTML = h`<p class="err">${e.message}</p>`.s; }
+}
+ACT['save-template'] = async (el) => { const k = el.dataset.key; try { await api('templates/' + k, { method: 'PUT', body: JSON.stringify({ body: $('#tpl-' + k).value }) }); toast('Message saved'); } catch (e) { toast(e.message, true); } };
+ACT['set-theme'] = (el) => { S.theme = el.dataset.v; applyTheme(); renderPage(); };
+ACT.signout = () => signOut('Signed out.');
+
+/* ---------- Help ---------- */
+PAGES.help = () => {
+  const bot = S.data.business.telegram_bot;
+  return h`${head('Help', 'How this works, in plain words', cta('Open Telegram bot', 'Message the bot', 'send', 'url', `data-url="https://t.me/${esc(bot)}"`))}
+    <div class="card"><div class="card-b help"><img class="mascot" src="/dashboard/brand/mascot.png" alt="">
+      <h3 style="margin-top:0">What this dashboard is</h3><p>One place to see money and bookings: revenue, invoices, expenses, deposit refunds and deductions, profit & loss, clients and the booking calendar. It reads the invoice app live and adds your accounts workbook, the expenses workbook and the Lead Manager. (Website visits and enquiries are on the separate <a data-native="1" href="https://go.bojiovenue.com/admin" target="_blank" rel="noopener">traffic dashboard</a>.)</p>
+      <h3>How money is counted</h3><ul><li><b>Revenue</b> = rental + cleaning fee + pet fee + overtime + top-ups + any deposit you kept. Counted in the month of the <i>event</i>.</li>
+        <li><b>A deposit is the client’s money.</b> It only becomes income if you keep it (damage or breach) — then it shows as “Kept”.</li><li><b>Cleaning fee collected is revenue</b>, never netted against the cleaning contractor.</li>
+        <li><b>Rent is nil</b> — there is no rent line and nothing here estimates one. <b>Equipment</b> bought for the 2025 setup is capital spend, kept out of the monthly P&L.</li>
+        <li><b>Gaps are stated, not filled in.</b> If amounts or costs weren’t recorded, the dashboard says so (see Overview → Data health).</li></ul>
+      <h3>Telegram commands</h3><p>Send these to <code>@${esc(bot)}</code>. <code>2026045</code> stands for the booking number.</p>
+      <ul><li>Forward your three WhatsApp templates (Event details, Quote, Particulars) → it builds the booking and asks <b>Confirm / Cancel</b>.</li>
+        <li><code>2026045 deposit paid</code> · <code>2026045 rental paid</code> · <code>2026045 cleaning paid</code> — add <code>paynow ocbc ref 12345</code> to record how.</li>
+        <li><code>2026045 paid 1137</code> — say the amount; it matches what’s owed and asks you to confirm.</li>
+        <li><code>2026045 deduct 150 reason: stained sofa</code> — files the deduction addendum for the client to acknowledge.</li>
+        <li><code>2026045 refunded</code> — marks the deposit refunded (send the transfer screenshot with the booking number as the caption).</li>
+        <li><code>2026045 postpone to 2026-12-01</code> · <code>2026045 stage</code> (where is it up to?)</li><li><code>set template agreement_send: …</code> — change a WhatsApp wording (or edit it in Settings).</li></ul>
+      <h3>Shortcuts</h3><ul><li><kbd>⌘K</kbd> / <kbd>Ctrl K</kbd> or <kbd>/</kbd> — command palette: jump anywhere, search clients, run actions</li><li><kbd>E</kbd> add expense · <kbd>B</kbd> record booking · <kbd>C</kbd> collect unpaid</li></ul>
+      <h3>Questions</h3>
+      <p><b>Why does revenue fall off after May 2026?</b> The accounts workbook has no bookings after 9 May 2026 — about 35 weren’t written down. The dashboard counts them (“confirmed bookings have no amounts recorded”) instead of guessing. Add them with <i>Record booking</i>, or they’ll appear automatically once they go through the invoice app.</p>
+      <p><b>Why is profit so high before October?</b> No costs were recorded before then, so those months are marked “not tracked” — their net is just revenue and is overstated.</p>
+      <p><b>Can I edit a row?</b> Rows you typed into the dashboard, yes. Rows imported from a workbook are edited in the workbook and re-imported, so the two never disagree.</p>
+      <p><b>Who can see this?</b> Only someone with the admin key. The page itself holds no data until you sign in.</p></div></div>`;
+};
+
+/* ---------- generic actions ---------- */
+ACT.go = (el) => goto(el.dataset.arg);
+ACT.palette = () => openPalette();
+ACT['nav-toggle'] = () => document.body.classList.toggle('nav-open');
+document.addEventListener('click', (e) => { if (document.body.classList.contains('nav-open') && (e.target.matches('#scrim') || e.target.closest('#side a'))) document.body.classList.remove('nav-open'); });
+ACT.refresh = async () => { await load(true); toast('Data refreshed'); };
+ACT.theme = () => { S.theme = S.theme === 'glass' ? 'light' : 'glass'; applyTheme(); renderPage(); };
+ACT.close = () => closeOverlay();
+ACT.url = (el) => { const u = el.dataset.url; if (u.startsWith('/')) window.open(u, '_blank', 'noopener'); else window.open(u, '_blank', 'noopener'); };
+ACT.csv = (el) => downloadCsv(el.dataset.kind, el.dataset.kind);
+ACT.print = () => window.print();
+ACT['open-health'] = () => { goto('overview'); setTimeout(() => { const a = $('#acc-health'); if (a) { a.open = true; a.scrollIntoView({ behavior: 'smooth', block: 'center' }); } }, 40); };
+ACT.sort = (el) => { const id = el.dataset.t, k = el.dataset.sort, cur = S.sort[id]; S.sort[id] = cur && cur.k === k ? { k, dir: -cur.dir } : { k, dir: 1 }; const reg = el.closest('[id^=reg-]'); if (reg) rerender(reg.id.slice(4)); else renderPage(); };
+ACT.filter = (el) => { const [page, key] = el.dataset.filter.split('.'); S.f[page][key] = el.value; rerender(page); };
+ACT.seg = (el) => { const [page, key] = el.dataset.f.split('.'); S.f[page][key] = el.dataset.v; renderPage(); };
+ACT['month-filter'] = (el) => { const ms = monthsIn(range()), i = +el.dataset.i, m = i < 0 ? '' : (ms[i] || {}).month || ''; S.f.revenue.month = S.f.revenue.month === m ? '' : m; renderPage(); };
+
+/* ---------- bookings: drawer, collect list, record form ---------- */
+ACT['booking-open'] = (el) => {
+  const b = S.data.bookings.find((x) => x.key === (el.dataset.key || el.dataset.arg)); if (!b) return;
+  const msg = `Hi ${firstName(b.client)}, a friendly reminder that ${money(b.outstanding)} is still outstanding for your BoJioVenue booking on ${fmtDate(b.date)}. Thank you! 😊`;
+  openDrawer({ title: b.client, body: h`<dl class="kv"><dt>Booking</dt><dd>${b.booking_no ? raw(`<span class="mono">${esc(b.booking_no)}</span>`) : 'Accounts workbook / entered by hand'}</dd><dt>Event</dt><dd>${fmtDate(b.date)}${b.start_time ? ` · ${b.start_time}–${b.end_time || ''}` : ''}${b.hours ? ` (${b.hours}h)` : ''}</dd>
+      <dt>Type</dt><dd>${b.kind}${b.purpose ? ' · ' + b.purpose : ''}</dd><dt>Status</dt><dd>${payPill(b)}</dd></dl>
+      <div class="label" style="margin:20px 0 6px">Money</div>
+      <dl class="kv"><dt>Rental</dt><dd>${money(b.rental)}</dd><dt>Cleaning fee</dt><dd>${money(b.cleaning)}</dd>${b.pet ? h`<dt>Pet fee</dt><dd>${money(b.pet)}</dd>` : ''}${b.extra ? h`<dt>Overtime / top-up</dt><dd>${money(b.extra)}</dd>` : ''}${b.discount ? h`<dt>Discount applied</dt><dd>${money(b.discount)}</dd>` : ''}
+      <dt><b>Revenue</b></dt><dd><b>${money(b.revenue)}</b></dd><dt>Collected</dt><dd>${money(b.collected)}</dd><dt>Balance</dt><dd>${b.outstanding > 0 ? h`<b style="color:var(--neg)">${money(b.outstanding)}</b>` : '—'}</dd>
+      <dt>Deposit</dt><dd>${money(b.deposit)} <span class="muted">(client’s money — not revenue)</span></dd></dl>${b.remarks ? h`<p class="muted" style="margin-top:14px">${b.remarks}</p>` : ''}`,
+    footer: h`${b.source === 'ledger' && b.editable ? h`<button class="btn danger" data-act="del-booking" data-id="${b.row_id}">Delete</button>` : ''}
+      ${b.token ? h`<a class="btn" data-native="1" target="_blank" rel="noopener" href="/sign/${b.token}">${ico('ext')}Agreement</a>` : ''}
+      ${b.outstanding > 0 && b.phone ? h`<a class="btn primary" data-native="1" target="_blank" rel="noopener" href="${waLink(b.phone, msg)}">${ico('wa')}Remind on WhatsApp</a>` : ''}` });
+};
+ACT.collect = () => {
+  const rows = S.data.bookings.filter((b) => b.counted && b.outstanding > 0 && b.source === 'app').sort((a, b) => (a.date < b.date ? -1 : 1));
+  openDrawer({ title: `Collect ${money(sumBy(rows, (b) => b.outstanding))}`, body: rows.length ? h`<div class="list">${rows.map((b) => {
+      const msg = `Hi ${firstName(b.client)}, a friendly reminder that ${money(b.outstanding)} is still outstanding for your BoJioVenue booking on ${fmtDate(b.date)}. Thank you! 😊`;
+      return h`<div class="item" style="cursor:default"><span class="ring neg"></span><span><span class="t">${b.client}</span><span class="muted" style="font-size:12.5px">${fmtDate(b.date)} · ${b.booking_no}${b.date < S.data.today ? ' · event has passed' : ''}</span></span>
+        <span class="m"><b style="color:var(--neg)">${money(b.outstanding)}</b></span>${b.phone ? h`<a class="btn sm" data-native="1" target="_blank" rel="noopener" href="${waLink(b.phone, msg)}" aria-label="Remind ${b.client} on WhatsApp">${ico('wa')}</a>` : h`<span class="pill dash">no phone</span>`}</div>`; })}</div>
+    <p class="muted" style="font-size:12.5px;margin-top:14px">The WhatsApp button opens a pre-written reminder — you tap send. Nothing goes out automatically.</p>` : emptyState('Nothing to collect', 'Every invoice-app booking is paid up.') });
+};
+ACT['del-booking'] = async (el) => { if (!confirm('Delete this booking record? This can’t be undone.')) return; try { await api('ledger-bookings/' + el.dataset.id, { method: 'DELETE' }); closeOverlay(); await load(true); toast('Booking record deleted'); } catch (e) { toast(e.message, true); } };
+
+const fld = (label, name, extra = '') => h`<label class="field"><span>${label}</span><input name="${name}" ${raw(extra)}></label>`;
+ACT['add-booking'] = (el) => {
+  const ds = (el && el.dataset) || {};
+  openDrawer({ title: 'Record a booking', body: h`<p class="muted" style="margin-bottom:16px">For bookings that aren’t in the invoice app — for example the ones missing from the accounts since May. A deposit is recorded separately and is never counted as revenue.</p>
+    <form id="f-bk" autocomplete="off"><div class="two">${fld('Event date', 'event_date', `type="date" required value="${esc(ds.date || '')}"`)}${fld('Client', 'client_name', `required maxlength="120" value="${esc(ds.client || '')}"`)}</div>
+    ${fld('What was the event?', 'purpose', `maxlength="120" placeholder="e.g. 21st birthday" value="${esc(ds.purpose || '')}"`)}
+    <div class="three">${fld('Rental fee', 'rental_fee', 'type="number" min="0" step="0.01"')}${fld('Cleaning fee', 'cleaning_fee', 'type="number" min="0" step="0.01" value="80"')}${fld('Pet / overtime', 'pet_fee', 'type="number" min="0" step="0.01"')}</div>
+    <div class="three">${fld('Top-up billed later', 'topup', 'type="number" min="0" step="0.01"')}${fld('Deposit held', 'deposit_amount', 'type="number" min="0" step="0.01" value="500"')}
+      <label class="field"><span>Paid?</span><select name="paid"><option value="yes">Yes</option><option value="no">Not yet</option><option value="partial">Partly</option></select></label></div>
+    <div class="two"><label class="field"><span>Payment mode</span><select name="payment_mode"><option value="">—</option><option>PayNow</option><option>Bank Transfer</option><option>Cash</option><option>Mixed</option></select></label>
+      <label class="field"><span>Type</span><select name="event_type"><option value="">Not sure</option><option>Social</option><option>Corporate</option><option>Seminar</option></select></label></div>
+    <label class="field"><span>Remarks</span><textarea name="remarks" maxlength="500"></textarea></label><div class="err" id="f-err"></div></form>`,
+    footer: h`<button class="btn" type="button" data-act="close">Cancel</button><button class="btn primary" type="submit" form="f-bk">Save booking</button>`,
+    onMount: () => { $('#f-bk').addEventListener('submit', async (e) => { e.preventDefault(); const fd = Object.fromEntries(new FormData(e.target)); try { await api('ledger-bookings', { method: 'POST', body: JSON.stringify(fd) }); closeOverlay(); await load(true); toast('Booking recorded'); } catch (err) { $('#f-err').textContent = err.message; } }); } });
+};
+
+/* ---------- expenses: form ---------- */
+function openExpense(v, id) {
+  const cats = S.data.categories;
+  openDrawer({ title: id ? 'Edit expense' : 'Add expense', body: h`<form id="f-exp" autocomplete="off">
+    <div class="two">${fld('Date', 'date', `type="date" required value="${esc(v.date || S.data.today)}"`)}${fld('Amount ($)', 'amount', `type="number" step="0.01" min="0.01" required value="${esc(v.amount || '')}"`)}</div>
+    <label class="field"><span>Category</span><select name="category">${cats.map((c) => h`<option ${c === (v.category || 'Utilities') ? raw('selected') : ''}>${c}</option>`)}</select></label>
+    ${fld('Description', 'description', `required maxlength="200" placeholder="e.g. October utilities bill" value="${esc(v.description || '')}"`)}
+    <div class="two"><label class="field"><span>Paid by</span><input name="paid_by" list="payers" value="${esc(v.paid_by || '')}"><datalist id="payers"><option>Kenneth</option><option>Carine</option></datalist></label>
+      <label class="field"><span>Payment method</span><select name="payment_method"><option value="">—</option>${['PayNow', 'Bank transfer', 'Cash', 'Card', 'Other'].map((m) => h`<option ${m === v.payment_method ? raw('selected') : ''}>${m}</option>`)}</select></label></div>
+    ${fld('Receipt file', 'receipt_file', `placeholder="2026-11-18_vendor_what-it-is.jpg" value="${esc(v.receipt_file || '')}"`)}
+    <label class="field"><span>Notes</span><textarea name="notes" maxlength="500">${v.notes || ''}</textarea></label>
+    <label class="field row"><input type="checkbox" name="is_estimate" ${v.estimate ? raw('checked') : ''}><span style="text-transform:none;letter-spacing:0;font:inherit;color:var(--ink2)">This is an estimate — the real bill isn’t on file yet</span></label><div class="err" id="f-err"></div></form>`,
+    footer: h`${id ? h`<button class="btn danger" type="button" data-act="del-expense" data-id="${id}">Delete</button>` : ''}<button class="btn" type="button" data-act="close">Cancel</button><button class="btn primary" type="submit" form="f-exp">Save</button>`,
+    onMount: () => { $('#f-exp').addEventListener('submit', async (e) => { e.preventDefault(); const fd = Object.fromEntries(new FormData(e.target)); fd.is_estimate = !!e.target.is_estimate.checked;
+      try { await api(id ? 'expenses/' + id : 'expenses', { method: id ? 'PUT' : 'POST', body: JSON.stringify(fd) }); closeOverlay(); await load(true); toast(id ? 'Expense updated' : 'Expense added'); } catch (err) { $('#f-err').textContent = err.message; } }); } });
+}
+ACT['add-expense'] = (el) => { const ds = (el && el.dataset) || {}; openExpense({ category: ds.cat, amount: ds.amt, description: ds.desc, estimate: ds.est === '1' }); };
+ACT['edit-expense'] = (el) => { const e = S.data.expenses.find((x) => x.id === +el.dataset.id); if (e) openExpense({ date: e.date, amount: e.amount, category: e.category, description: e.description, paid_by: e.paid_by, payment_method: e.payment_method, receipt_file: e.receipt_file, notes: e.notes, estimate: e.is_estimate }, e.id); };
+ACT['del-expense'] = async (el) => { if (!confirm('Delete this expense? This can’t be undone.')) return; try { await api('expenses/' + el.dataset.id, { method: 'DELETE' }); closeOverlay(); await load(true); toast('Expense deleted'); } catch (e) { toast(e.message, true); } };

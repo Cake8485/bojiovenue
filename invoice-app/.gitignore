@@ -5,3 +5,7 @@ dist/
 *.log
 .DS_Store
 desktop.ini
+
+# Private business data (client names/amounts) — the GitHub repo is PUBLIC, never commit these.
+# Generated locally by scripts/import_finance.py from the finance workbooks.
+.seed/

@@ -292,3 +292,99 @@ INSERT OR IGNORE INTO message_templates (key, body) VALUES
   ('agreement_send', 'This is the agreement, you take a look. All good u can sign n Paynow to us 😊'),
   ('after_sign_payment', 'Once you signed n make the payment. Screenshot to me 😊'),
   ('booking_confirmed', 'We had block out ur date already 😊');
+
+-- ---------------------------------------------------------------------------
+-- Business dashboard (2026-11-18) — four additive tables. Whole NEW tables only,
+-- so `npm run deploy`'s automatic schema apply creates them safely (see the
+-- header: only a column added to an EXISTING table needs a hand-written ALTER).
+--
+-- Why these exist: the invoice app only holds bookings made since it went live,
+-- but BoJioVenue's real money history lives in accounting.xlsx / expenses-2026.xlsx
+-- / the Lead Manager. The dashboard reads the app's own tables PLUS these, and
+-- states plainly what is missing instead of estimating it (finance-rules.md).
+--
+-- Ownership rule — one owner per row: rows with source LIKE 'import:%' come from a
+-- workbook and are re-written by scripts/import_finance.py (upsert on source_key);
+-- rows with source = 'manual' were typed into the dashboard and are the only ones
+-- the dashboard may edit or delete.
+-- ---------------------------------------------------------------------------
+
+-- Every cost. Mirrors the 'Expenses' sheet of expenses-2026.xlsx column for column.
+-- Equipment (capex) rows are NOT a monthly cost — the P&L keeps them separate.
+CREATE TABLE IF NOT EXISTS expenses (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  expense_date   TEXT    NOT NULL,                 -- YYYY-MM-DD
+  category       TEXT    NOT NULL,                 -- Utilities | Cleaning contractor | Consumables & replacements | Marketing / ad spend | Platform commission | Equipment (capex) | Other
+  description    TEXT    NOT NULL,
+  amount         REAL    NOT NULL,
+  paid_by        TEXT,
+  payment_method TEXT,
+  receipt_file   TEXT,
+  notes          TEXT,
+  is_estimate    INTEGER NOT NULL DEFAULT 0,       -- 1 = a guess, actual bill not on file
+  source         TEXT    NOT NULL DEFAULT 'manual',
+  source_key     TEXT    UNIQUE,                   -- stable key for idempotent imports; NULL for hand-entered rows
+  created_at     TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(expense_date);
+
+-- Bookings recorded OUTSIDE the invoice app (pre-app history from accounting.xlsx
+-- 'Bookings & Revenue', or keyed in by hand). Amounts are all nullable: NULL means
+-- "not recorded", which is different from 0.
+CREATE TABLE IF NOT EXISTS ledger_bookings (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_date     TEXT    NOT NULL,
+  client_name    TEXT    NOT NULL,
+  purpose        TEXT,
+  event_type     TEXT,                             -- Social | Corporate | Seminar, only if actually known
+  rental_fee     REAL,
+  cleaning_fee   REAL,
+  pet_fee        REAL,
+  overtime       REAL,
+  topup          REAL,                             -- extra invoiced later (e.g. after a damage forfeit) — income
+  deposit_amount REAL,
+  total_invoiced REAL,                             -- as written in the source (includes the deposit)
+  paid           TEXT,                             -- yes | no | partial
+  payment_mode   TEXT,
+  remarks        TEXT,
+  status         TEXT    NOT NULL DEFAULT 'confirmed', -- confirmed | cancelled
+  source         TEXT    NOT NULL DEFAULT 'manual',
+  source_key     TEXT    UNIQUE,
+  created_at     TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_ledger_bookings_date ON ledger_bookings(event_date);
+
+-- Deposit outcomes recorded outside the app ('Deposit Tracking' sheet). A deposit is
+-- the client's money, not revenue — it only becomes income if forfeited/deducted.
+CREATE TABLE IF NOT EXISTS ledger_deposits (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_date        TEXT    NOT NULL,
+  client_name       TEXT    NOT NULL,
+  deposit_collected REAL,
+  deduction         REAL,                          -- retained from the deposit (income)
+  refund_amount     REAL,
+  refund_status     TEXT,                          -- Refunded | Partial refund | Forfeited | Pending
+  topup_invoiced    REAL,                          -- separate top-up invoiced after a forfeit (income)
+  evidence          TEXT,
+  source            TEXT    NOT NULL DEFAULT 'manual',
+  source_key        TEXT    UNIQUE,
+  created_at        TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Confirmed bookings from the Lead Manager, kept for the booking CALENDAR and client
+-- list only. Deliberately no phone numbers or notes — names and dates are enough.
+CREATE TABLE IF NOT EXISTS calendar_imports (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_date      TEXT    NOT NULL,
+  client_name     TEXT    NOT NULL,
+  time_slot       TEXT,
+  duration_hours  REAL,
+  purpose         TEXT,
+  status          TEXT    NOT NULL DEFAULT 'Confirmed', -- Confirmed | Soft Book
+  deposit_status  TEXT,
+  balance_status  TEXT,
+  source          TEXT    NOT NULL DEFAULT 'import:lead-manager',
+  source_key      TEXT    UNIQUE,
+  created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_calendar_imports_date ON calendar_imports(event_date);

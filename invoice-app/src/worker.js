@@ -44,6 +44,9 @@ import {
   parseTelegramTemplate, parseFlexibleDate, parseLooseNumber, parseFlexibleTime,
   detectWaTemplateType, parseWaEventDetails, parseWaQuote, parseWaParticulars, waAccumulationToFields, WA_GROUP_LABELS,
 } from "./parsing.js";
+import { dashboardPage } from "./dashboard.js";
+import { dashboardApi } from "./dashboardApi.js";
+import { mascotPng } from "./assets.js";
 
 const json = (data, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
@@ -82,6 +85,21 @@ export default {
         return telegramWebhook(env, ctx, request);
       }
 
+      // ---- Business dashboard (2026-11-18) ------------------------------
+      // The page and the mascot are public SHELLS — no business data in them. Every
+      // number arrives through /api/dashboard/*, which sits behind the same Bearer
+      // ADMIN_KEY check as the rest of the admin API (and reuses the admin page's
+      // saved key, so signing in to one signs in to both).
+      if (parts[0] === "dashboard" && parts[1] === "brand" && parts[2] === "mascot.png") {
+        return new Response(mascotPng, { headers: { "Content-Type": "image/png", "Cache-Control": "public, max-age=604800" } });
+      }
+      if (parts[0] === "dashboard" && parts.length === 1) {
+        return new Response(dashboardPage(env), { headers: {
+          "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store",
+          "X-Robots-Tag": "noindex, nofollow", "Referrer-Policy": "no-referrer", "X-Frame-Options": "DENY",
+        } });
+      }
+
       // ---- Admin UI -----------------------------------------------------
       if (parts.length === 0 || parts[0] === "admin") return html(adminPage(env));
 
@@ -89,6 +107,7 @@ export default {
       if (parts[0] === "api") {
         const auth = request.headers.get("Authorization") || "";
         if (!env.ADMIN_KEY || auth !== `Bearer ${env.ADMIN_KEY}`) return json({ error: "unauthorized" }, 401);
+        if (parts[1] === "dashboard") return dashboardApi(env, parts.slice(2), method, request);
         return adminApi(env, parts, method, request);
       }
 

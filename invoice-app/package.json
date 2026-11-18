@@ -5,7 +5,7 @@
   "type": "module",
   "description": "BojioVenue invoice/receipt generator + agreement generator (Cloudflare Worker)",
   "scripts": {
-    "test": "node test-parsing.js && node test-pricing.js",
+    "test": "node test-parsing.js && node test-pricing.js && node test-dashboard.js",
     "dev": "wrangler dev",
     "deploy": "npm run db:init && wrangler deploy",
     "db:create": "wrangler d1 create bojiovenue-invoice",

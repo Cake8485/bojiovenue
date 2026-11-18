@@ -1,0 +1,300 @@
+/* ==========================================================================
+   Pages, part 1 — shared components, Overview, Revenue, Invoices, Expenses,
+   Refunds & Deductions, Profit & Loss.
+   ========================================================================== */
+const ACCENT = 'var(--accent)', WARM = 'var(--warm)', POS = 'var(--pos)', MUTE = 'var(--ink4)', GOLD = '#C99700';
+const REGIONS = {};   // re-renderable table regions (search boxes live OUTSIDE them so typing never loses focus)
+
+const head = (title, sub, actions) => h`<div class="page-head"><div><h1>${title}</h1><div class="sub label">${sub}</div></div><div class="head-actions">${actions || ''}</div></div>`;
+const cta = (label, hover, icon, act, data) => h`<button class="cta" data-act="${act}" ${raw(data || '')}>${ico(icon, icon === 'send' ? 'fly' : '')}<span class="lab"><span class="l1">${label}</span><span class="l2">${hover}</span></span></button>`;
+const kpi = (label, icon, value, ctx, tone, alert) => h`<div class="card kpi ${alert ? 'alert' : ''}"><div class="top-row"><span class="label">${label}</span>${ico(icon)}</div><div class="n">${value}</div><div class="ctx ${tone || ''}">${ctx}</div></div>`;
+const emptyState = (title, text) => h`<div class="empty"><img src="/dashboard/brand/mascot.png" alt=""><b>${title}</b><span>${text}</span></div>`;
+const accordion = (id, title, meta, body, open) => h`<details class="card acc" id="${id}" ${open ? raw('open') : ''}><summary>${ico('chev')}<span>${title}</span><span class="meta">${meta}</span></summary><div class="acc-b">${body}</div></details>`;
+const pill = (text, tone) => h`<span class="pill ${tone || ''}">${text}</span>`;
+const stateTone = { signed: 'pos', awaiting: 'amber', confirmed: 'brand', recorded: '', tentative: 'dash' };
+const stateText = { signed: 'Signed', awaiting: 'Awaiting signature', confirmed: 'Confirmed', recorded: 'Recorded', tentative: 'Soft book' };
+const payPill = (b) => (!b.counted ? pill('Awaiting signature', 'amber') : b.paid_state === 'paid' ? pill('Paid', 'pos') : b.paid_state === 'partial' ? pill('Partly paid', 'amber') : pill('Unpaid', 'neg'));
+const depTone = { refunded: 'pos', partial: 'amber', forfeited: 'neg', held: 'brand' };
+const depText = { refunded: 'Refunded', partial: 'Partly refunded', forfeited: 'Forfeited', held: 'Held' };
+// chart axis for a run of months: 3-letter month, the year underneath Jan / the first month, the full name in the tooltip,
+// and a flag for months with confirmed bookings but no recorded amounts (drawn as ? / hollow points)
+const monthSpec = (ms) => ({ labels: ms.map((m) => fmtMon(m.month)), sub: ms.map((m, i) => (i === 0 || m.month.endsWith('-01') ? m.month.slice(0, 4) : '')), tips: ms.map((m) => fmtMonth(m.month)), incomplete: ms.map((m) => m.unpriced > 0) });
+const gapNote = (ms) => (ms.some((m) => m.unpriced > 0) ? raw('<p class="muted" style="font-size:12px;margin-top:8px"><b style="color:var(--amber)">?</b> / hollow point = confirmed bookings that month have no recorded amounts, so it is understated — not a quiet month.</p>') : '');
+const waLink = (phone, text) => { const dg = String(phone || '').replace(/\D/g, ''); return `https://wa.me/${dg.length === 8 ? '65' + dg : dg}?text=${encodeURIComponent(text)}`; };
+const firstName = (n) => String(n || '').trim().split(/\s+/).slice(0, 2).join(' ');
+
+function banner() {
+  const warns = S.data.health.filter((x) => x.level === 'warn'); if (!warns.length) return '';
+  return h`<div class="banner">${ico('alert')}<span><b>Some figures are incomplete.</b> ${warns.slice(0, 2).map((w) => w.title).join(' · ')}${warns.length > 2 ? ` · +${warns.length - 2} more` : ''}</span><button data-act="open-health">See what’s missing</button></div>`;
+}
+
+function table(id, cols, rows, opts = {}) {
+  const st = S.sort[id]; let data = rows.slice();
+  if (st) { const c = cols.find((x) => x.k === st.k); if (c && c.sort) data.sort((a, b) => { const x = c.sort(a), y = c.sort(b); return (x < y ? -1 : x > y ? 1 : 0) * st.dir; }); }
+  if (!data.length) return opts.empty || emptyState('Nothing here yet', '');
+  return h`<div class="table-wrap"><table class="t ${opts.cls || ''}"><thead><tr>${cols.map((c) => h`<th class="${c.r ? 'r' : ''}" ${c.sort ? raw(`data-sort="${esc(c.k)}" data-act="sort" data-t="${esc(id)}"`) : ''}>${c.label}${st && st.k === c.k ? (st.dir > 0 ? ' ↑' : ' ↓') : ''}</th>`)}</tr></thead>
+    <tbody>${data.map((row) => h`<tr ${opts.rowAct ? raw(`data-act="${opts.rowAct}" data-key="${esc(row.key || row.id || row.name)}"`) : ''}>${cols.map((c) => h`<td class="${c.r ? 'r' : ''}">${c.f(row)}</td>`)}</tr>`)}</tbody>
+    ${opts.foot ? h`<tfoot>${opts.foot}</tfoot>` : ''}</table></div>`;
+}
+function rerender(region) { const el = $('#reg-' + region); if (el && REGIONS[region]) { el.innerHTML = REGIONS[region]().s; drawCharts(); } }
+
+/* ---------- Overview ---------- */
+function actionItems() {
+  const d = S.data, t = d.today, out = [];
+  const od = overdueRefunds(); if (od) out.push({ tone: 'neg', t: `Refund ${plural(od.count, 'deposit')} — overdue`, m: 'REFUNDS', act: 'go', arg: 'refunds' });
+  const owed = d.bookings.filter((b) => b.counted && b.outstanding > 0 && b.source === 'app');
+  if (owed.length) out.push({ tone: 'warn', t: `Collect ${money(sumBy(owed, (b) => b.outstanding))} from ${plural(owed.length, 'client')}`, m: 'TO COLLECT', act: 'collect' });
+  d.calendar.filter((e) => e.state === 'awaiting' && e.date >= t).slice(0, 2).forEach((e) => out.push({ tone: 'warn', t: `Chase signature — ${e.client}`, m: `IN ${daysBetween(t, e.date)}D`, act: 'cal-date', arg: e.date }));
+  d.calendar.filter((e) => e.date >= t && daysBetween(t, e.date) <= 7 && (e.state === 'signed' || e.state === 'confirmed')).slice(0, 3)
+    .forEach((e) => out.push({ tone: '', t: `${e.client} — ${fmtShort(e.date)}${e.time ? ' · ' + e.time : ''}`, m: daysBetween(t, e.date) === 0 ? 'TODAY' : `IN ${daysBetween(t, e.date)}D`, act: 'cal-date', arg: e.date }));
+  const coll = [...new Set(d.calendar.filter((e) => e.collision && e.date >= t).map((e) => e.date))];
+  coll.slice(0, 2).forEach((dt) => out.push({ tone: 'neg', t: `Two bookings on ${fmtShort(dt)} — check for a double-booking`, m: 'CLASH', act: 'cal-date', arg: dt }));
+  const miss = d.health.find((x) => x.id === 'missing_amounts');
+  if (miss) out.push({ tone: 'warn', t: `Record amounts for ${plural(miss.count, 'past booking')}`, m: 'MISSING DATA', act: 'add-booking' });
+  return out.slice(0, 7);
+}
+
+PAGES.overview = () => {
+  const d = S.data, r = range(), ms = monthsIn(r), t = totals(ms), sm = d.summary;
+  const items = actionItems();
+  const upcoming = d.calendar.filter((e) => e.date >= d.today && e.state !== 'tentative').slice(0, 6);
+  const recent = d.bookings.filter((b) => b.counted && b.date <= d.today).slice(-6).reverse();
+  CHART_SPECS['ov-rev'] = { type: 'line', aria: 'Revenue by month', ...monthSpec(ms), series: [{ name: 'Revenue', color: ACCENT, values: ms.map((m) => m.revenue), area: true }],
+    extraTip: (i) => (ms[i].unpriced ? `${plural(ms[i].unpriced, 'booking')} without amounts` : '') };
+  const cto = sm.to_collect > 0 ? cta('Chase unpaid', `Collect ${money(sm.to_collect)}`, 'send', 'collect') : cta('Add expense', 'Log a cost', 'plus', 'add-expense');
+  return h`${head('Overview', `${r.label} · updated ${agoText(new Date(S.loadedAt).toISOString())}`, cto)}
+    ${banner()}
+    <div class="grid kpis">
+      ${kpi('Revenue', 'trend', money(t.revenue), t.unpriced ? `${plural(t.bookings, 'booking')} · ${t.unpriced} without amounts` : `${plural(t.bookings, 'booking')}`, t.unpriced ? 'warn' : '')}
+      ${kpi('Net profit', 'pie', t.anyCosts || t.cost ? money(t.net) : '—', !t.anyCosts ? 'No costs recorded in this period' : t.incomplete ? 'Costs missing for some months' : `after ${money(t.cost)} of costs`, !t.anyCosts || t.incomplete ? 'warn' : t.net >= 0 ? 'pos' : 'neg')}
+      ${kpi('To collect', 'alert', money(sm.to_collect), sm.to_collect_count ? `${plural(sm.to_collect_count, 'booking')} owe it` : 'Nothing outstanding', sm.to_collect ? 'neg' : 'pos', sm.to_collect > 0)}
+    </div>
+    <div class="grid cols">
+      <div class="card"><div class="card-h"><h2>Revenue</h2><span class="label">${esc(r.label)}</span></div><div class="card-b"><div class="chart" data-chart="ov-rev"></div>${gapNote(ms)}</div></div>
+      <div class="card"><div class="card-h"><h2>Action items</h2><span class="pill">${items.length}</span></div><div class="card-b">
+        ${items.length ? h`<div class="list">${items.map((it) => h`<button class="item" data-act="${it.act}" ${it.arg ? raw(`data-arg="${esc(it.arg)}"`) : ''}><span class="ring ${it.tone}"></span><span class="t">${it.t}</span><span class="m">${it.m}</span></button>`)}</div>` : h`<div class="empty"><b>All clear</b><span>Nothing needs you right now.</span></div>`}
+      </div></div>
+    </div>
+    <div class="card quick noprint">
+      <button class="btn sm" data-act="add-expense">${ico('plus')}Add expense</button>
+      <button class="btn sm" data-act="add-booking">${ico('file')}Record booking</button>
+      <button class="btn sm" data-act="url" data-url="/admin">${ico('ext')}New invoice (admin)</button>
+      <button class="btn sm" data-act="csv" data-kind="pnl">${ico('dl')}Export P&L</button>
+      <button class="btn sm" data-act="url" data-url="https://t.me/${esc(d.business.telegram_bot)}">${ico('send')}Open Telegram bot</button>
+    </div>
+    ${accordion('acc-upcoming', 'Upcoming bookings', `${sm.upcoming_events} confirmed · ${sm.booked_ahead_count ? money(sm.booked_ahead) + ' booked ahead' : 'amounts not recorded'}`, upcoming.length ? table('ov-up', [
+      { k: 'date', label: 'Date', f: (e) => fmtDate(e.date) }, { k: 'client', label: 'Client', f: (e) => h`${e.client}${e.collision ? raw(' <span class="pill neg">clash</span>') : ''}` },
+      { k: 'time', label: 'Time', f: (e) => e.time || '—' }, { k: 'st', label: 'Status', f: (e) => pill(stateText[e.state], stateTone[e.state]) },
+    ], upcoming, { rowAct: 'cal-date-row' }) : emptyState('No upcoming bookings', 'Confirmed bookings from the invoice app and the Lead Manager show up here.'))}
+    ${accordion('acc-recent', 'Recent bookings', `last ${recent.length}`, recent.length ? table('ov-rec', [
+      { k: 'date', label: 'Date', f: (b) => fmtDate(b.date) }, { k: 'client', label: 'Client', f: (b) => b.client },
+      { k: 'rev', label: 'Revenue', r: 1, f: (b) => money(b.revenue) }, { k: 'pay', label: 'Payment', f: (b) => payPill(b) },
+    ], recent, { rowAct: 'booking-open' }) : emptyState('No bookings yet', ''))}
+    ${accordion('acc-health', 'Data health', `${plural(d.health.length, 'note')}${d.health.some((x) => x.level === 'warn') ? ' · needs attention' : ''}`, healthList(), false)}`;
+};
+
+function healthList() {
+  const hs = S.data.health;
+  if (!hs.length) return h`<div class="empty"><b>Everything is accounted for</b></div>`;
+  return h`${hs.map((x) => h`<div class="health-item"><span class="dot" style="margin-top:7px;background:${x.level === 'warn' ? 'var(--warm)' : 'var(--ink4)'}"></span><div><b>${x.title}</b><p>${x.detail}</p>${x.action ? h`<button class="btn sm" style="margin-top:8px" data-act="${x.action.do}">${x.action.label}</button>` : ''}</div></div>`)}
+    <p class="muted" style="font-size:12.5px;margin-top:10px">Rule: gaps are stated here, never filled in with estimates. Source of truth stays accounting.xlsx, expenses-2026.xlsx and the Lead Manager.</p>`;
+}
+
+/* ---------- Revenue ---------- */
+REGIONS.revenue = () => {
+  const r = range(), f = S.f.revenue;
+  let rows = S.data.bookings.filter((b) => b.counted && inR(b.date, r));
+  if (f.month) rows = rows.filter((b) => b.date.startsWith(f.month));
+  return table('rev', [
+    { k: 'date', label: 'Event', sort: (b) => b.date, f: (b) => fmtDate(b.date) },
+    { k: 'client', label: 'Client', sort: (b) => b.client.toLowerCase(), f: (b) => h`${b.client}<span class="sub">${b.purpose || b.kind}</span>` },
+    { k: 'rental', label: 'Rental', r: 1, sort: (b) => b.rental, f: (b) => money(b.rental) },
+    { k: 'clean', label: 'Cleaning', r: 1, sort: (b) => b.cleaning, f: (b) => money(b.cleaning) },
+    { k: 'extra', label: 'Other', r: 1, sort: (b) => b.pet + b.extra, f: (b) => (b.pet + b.extra ? money(b.pet + b.extra) : '—') },
+    { k: 'rev', label: 'Revenue', r: 1, sort: (b) => b.revenue, f: (b) => h`<b>${money(b.revenue)}</b>` },
+    { k: 'pay', label: 'Payment', f: (b) => payPill(b) },
+  ], rows, { rowAct: 'booking-open', empty: emptyState('No bookings in this period', 'Try a longer period, or record a booking that isn’t in the invoice app.'),
+    foot: h`<tr><td colspan="2">${plural(rows.length, 'booking')}</td><td class="r">${money(sumBy(rows, (b) => b.rental))}</td><td class="r">${money(sumBy(rows, (b) => b.cleaning))}</td><td class="r">${money(sumBy(rows, (b) => b.pet + b.extra))}</td><td class="r">${money(sumBy(rows, (b) => b.revenue))}</td><td></td></tr>` });
+};
+PAGES.revenue = () => {
+  const r = range(), ms = monthsIn(r), t = totals(ms), d = S.data, f = S.f.revenue;
+  const rows = d.bookings.filter((b) => b.counted && inR(b.date, r));
+  const kinds = ['Social', 'Corporate', 'Seminar', 'Unspecified'].map((k, i) => ({ name: k, value: sumBy(rows.filter((b) => b.kind === k), (b) => b.revenue), color: [ACCENT, WARM, POS, MUTE][i] }));
+  CHART_SPECS['rv-bars'] = { type: 'bars', stacked: true, aria: 'Revenue by month', ...monthSpec(ms), click: 'month-filter', series: [
+    { name: 'Rental', color: ACCENT, values: ms.map((m) => m.rental) }, { name: 'Cleaning fees', color: GOLD, values: ms.map((m) => m.cleaning) }, { name: 'Top-ups & retained deposits', color: WARM, values: ms.map((m) => m.topups) }],
+    extraTip: (i) => (ms[i].unpriced ? `${plural(ms[i].unpriced, 'booking')} without amounts` : '') };
+  CHART_SPECS['rv-kind'] = { type: 'donut', aria: 'Revenue by event type', parts: kinds, center: { big: money(t.revenue), small: 'TOTAL' } };
+  return h`${head('Revenue', `${r.label} · counted in the month of the event`, cta('Record booking', 'Add to revenue', 'plus', 'add-booking'))}
+    ${banner()}
+    <div class="grid kpis four">
+      ${kpi('Total revenue', 'trend', money(t.revenue), plural(t.bookings, 'booking'))}
+      ${kpi('Rental', 'file', money(t.rental), t.priced ? `avg ${money(t.rental / t.priced)} per priced booking` : '—')}
+      ${kpi('Cleaning collected', 'check', money(t.cleaning), 'Revenue, not a cost')}
+      ${kpi('Forfeits & top-ups', 'undo', money(t.topups), 'Income from kept deposits')}
+    </div>
+    <div class="grid cols">
+      <div class="card"><div class="card-h"><h2>By month</h2><span class="label">click a bar to filter</span></div><div class="card-b"><div class="chart" data-chart="rv-bars"></div>
+        <div class="legend"><span><i style="background:var(--accent)"></i>Rental</span><span><i style="background:${GOLD}"></i>Cleaning</span><span><i style="background:var(--warm)"></i>Top-ups & retained</span></div>${gapNote(ms)}</div></div>
+      <div class="card"><div class="card-h"><h2>By event type</h2></div><div class="card-b"><div class="chart" data-chart="rv-kind"></div>
+        <div class="legend" style="justify-content:center">${kinds.filter((k) => k.value > 0).map((k, i) => h`<span><i style="background:${k.color}"></i>${k.name}</span>`)}</div>
+        <p class="muted" style="font-size:12px;margin-top:10px;text-align:center">Imported history is classified from the event description.</p></div></div>
+    </div>
+    <div class="card"><div class="toolbar"><h2 style="font-size:14px;font-weight:600">Bookings</h2>${f.month ? h`<span class="pill brand">${fmtMonth(f.month)} <button class="btn ghost sm" style="padding:0 4px" data-act="month-filter" data-i="-1" aria-label="Clear month">${ico('x')}</button></span>` : ''}</div>
+      <div class="card-b"><div id="reg-revenue">${REGIONS.revenue()}</div></div></div>
+    <p class="muted" style="font-size:12.5px;margin:12px 4px">A security deposit is the client’s money — it is <b>not</b> revenue unless forfeited or deducted. Cleaning fees collected <b>are</b> revenue. Future bookings count as “booked ahead” (${money(d.summary.booked_ahead)}), not revenue yet.</p>`;
+};
+
+/* ---------- Invoices ---------- */
+REGIONS.invoices = () => {
+  const f = S.f.invoices, q = f.q.trim().toLowerCase();
+  let rows = S.data.bookings.filter((b) => (b.counted || b.source === 'app'));
+  if (q) rows = rows.filter((b) => `${b.client} ${b.booking_no || ''}`.toLowerCase().includes(q));
+  if (f.pay !== 'all') rows = rows.filter((b) => (f.pay === 'await' ? !b.counted : b.counted && b.paid_state === f.pay));
+  rows = rows.slice().sort((a, b) => (a.date < b.date ? 1 : -1));
+  return table('inv', [
+    { k: 'no', label: 'Booking', sort: (b) => b.booking_no || '', f: (b) => (b.booking_no ? h`<span class="mono">${b.booking_no}</span>` : h`<span class="muted">accounts</span>`) },
+    { k: 'client', label: 'Client', sort: (b) => b.client.toLowerCase(), f: (b) => h`${b.client}<span class="sub">${b.kind}${b.payment_mode ? ' · ' + b.payment_mode : ''}</span>` },
+    { k: 'date', label: 'Event', sort: (b) => b.date, f: (b) => fmtDate(b.date) },
+    { k: 'rev', label: 'Billed', r: 1, sort: (b) => b.revenue, f: (b) => money(b.revenue) },
+    { k: 'dep', label: 'Deposit', r: 1, sort: (b) => b.deposit, f: (b) => (b.deposit ? money(b.deposit) : '—') },
+    { k: 'bal', label: 'Balance', r: 1, sort: (b) => b.outstanding, f: (b) => (b.outstanding > 0 ? h`<b style="color:var(--neg)">${money(b.outstanding)}</b>` : '—') },
+    { k: 'pay', label: 'Status', f: (b) => payPill(b) },
+  ], rows, { rowAct: 'booking-open', empty: emptyState('No invoices match', 'Bookings made through the invoice app appear here automatically.') });
+};
+PAGES.invoices = () => {
+  const d = S.data, f = S.f.invoices, c = d.bookings.filter((b) => b.counted);
+  const seg = [['all', 'All'], ['unpaid', 'Unpaid'], ['partial', 'Part-paid'], ['paid', 'Paid'], ['await', 'Awaiting signature']];
+  return h`${head('Invoices', `${plural(c.length, 'billed booking')} · ${d.sources.app_invoices} from the invoice app`, cta('New booking', 'Open invoice admin', 'file', 'url', 'data-url="/admin"'))}
+    <div class="grid kpis">
+      ${kpi('Billed', 'file', money(sumBy(c, (b) => b.revenue)), 'Rental + cleaning + extras')}
+      ${kpi('Collected', 'check', money(sumBy(c, (b) => b.collected)), 'Payments received', 'pos')}
+      ${kpi('To collect', 'alert', money(d.summary.to_collect), d.summary.to_collect_count ? `${plural(d.summary.to_collect_count, 'booking')} · invoice-app bookings` : 'Nothing outstanding', d.summary.to_collect ? 'neg' : 'pos', d.summary.to_collect > 0)}
+    </div>
+    <div class="card"><div class="toolbar"><input type="search" placeholder="Search client or booking no." value="${f.q}" data-filter="invoices.q" aria-label="Search invoices">
+      <div class="seg" role="group" aria-label="Filter">${seg.map((s) => h`<button aria-pressed="${f.pay === s[0]}" data-act="seg" data-f="invoices.pay" data-v="${s[0]}">${s[1]}</button>`)}</div></div>
+      <div class="card-b"><div id="reg-invoices">${REGIONS.invoices()}</div></div></div>`;
+};
+
+/* ---------- Expenses ---------- */
+REGIONS.expenses = () => {
+  const r = range(), f = S.f.expenses, q = f.q.trim().toLowerCase();
+  let rows = S.data.expenses.filter((e) => inR(e.date, r) || e.capex);
+  rows = rows.filter((e) => inR(e.date, r));
+  if (q) rows = rows.filter((e) => `${e.description} ${e.category} ${e.paid_by || ''} ${e.notes || ''}`.toLowerCase().includes(q));
+  if (f.cat !== 'all') rows = rows.filter((e) => e.category === f.cat);
+  return table('exp', [
+    { k: 'date', label: 'Date', sort: (e) => e.date, f: (e) => fmtDate(e.date) },
+    { k: 'cat', label: 'Category', sort: (e) => e.category, f: (e) => h`${e.category}${e.capex ? raw(' <span class="pill brand">capex</span>') : ''}` },
+    { k: 'desc', label: 'Description', f: (e) => h`${e.description}${e.is_estimate ? raw(' <span class="pill amber">estimate</span>') : ''}${e.notes ? h`<span class="sub">${e.notes}</span>` : ''}` },
+    { k: 'amt', label: 'Amount', r: 1, sort: (e) => e.amount, f: (e) => h`<b>${money(e.amount)}</b>` },
+    { k: 'by', label: 'Paid by', f: (e) => e.paid_by || '—' },
+    { k: 'act', label: '', f: (e) => (e.editable ? h`<button class="btn ghost sm" data-act="edit-expense" data-id="${e.id}" aria-label="Edit">${ico('edit')}</button>` : h`<span class="muted" data-tip="Imported from expenses-2026.xlsx — edit it there, then re-import">import</span>`) },
+  ], rows, { empty: emptyState('No expenses in this period', 'Costs you log here feed the Profit & Loss. Rent is nil, so the main ones are utilities and the cleaning contractor.') });
+};
+PAGES.expenses = () => {
+  const r = range(), d = S.data, ms = monthsIn(r), t = totals(ms), f = S.f.expenses;
+  const inRange = d.expenses.filter((e) => inR(e.date, r) && !e.capex);
+  const cats = d.categories.filter((c) => c !== 'Equipment (capex)').map((c, i) => ({ name: c, value: sumBy(inRange.filter((e) => e.category === c), (e) => e.amount), color: ['var(--accent)', 'var(--warm)', '#C99700', 'var(--pos)', '#3566A8', MUTE][i] || MUTE }));
+  CHART_SPECS['ex-cat'] = { type: 'donut', aria: 'Costs by category', parts: cats, center: { big: money(t.cost), small: 'COSTS' } };
+  const monthNow = d.today.slice(0, 7), haveUtil = d.expenses.some((e) => e.category === 'Utilities' && e.date.startsWith(monthNow)), haveClean = d.expenses.some((e) => e.category === 'Cleaning contractor' && e.date.startsWith(monthNow));
+  const lastMonthCost = [...d.months].reverse().find((m) => m.costs_recorded && m.cost > 0);
+  return h`${head('Expenses', `${r.label} · rent is nil`, cta('Add expense', 'Log a cost', 'plus', 'add-expense'))}
+    <div class="grid kpis">
+      ${kpi('Costs', 'wallet', money(t.cost), t.anyCosts ? `${plural(inRange.length, 'entry', 'entries')} · capex excluded` : 'None recorded in this period', t.anyCosts ? '' : 'warn')}
+      ${kpi('Monthly run-rate', 'cal', lastMonthCost ? money(lastMonthCost.cost) : '—', lastMonthCost ? `from ${fmtMonth(lastMonthCost.month)} — the fixed cost base` : 'Add a month of costs to see this', '')}
+      ${kpi('Equipment (capex)', 'pie', d.summary.capex_total ? money(d.summary.capex_total) : '—', d.summary.capex_total ? 'logged — kept out of monthly P&L' : 'Not loaded yet', d.summary.capex_total ? '' : 'warn')}
+    </div>
+    <div class="card quick noprint"><span class="label" style="padding:0 8px">Quick add for ${fmtMonth(monthNow)}</span>
+      ${haveUtil ? '' : h`<button class="btn sm" data-act="add-expense" data-cat="Utilities" data-amt="300" data-est="1" data-desc="Monthly utilities">${ico('plus')}Utilities (~$300, estimate)</button>`}
+      ${haveClean ? '' : h`<button class="btn sm" data-act="add-expense" data-cat="Cleaning contractor" data-amt="110" data-desc="Monthly cleaning contractor payout">${ico('plus')}Cleaning contractor ($110)</button>`}
+      <button class="btn sm" data-act="add-expense" data-cat="Consumables & replacements">${ico('plus')}Consumables</button>
+      <button class="btn sm" data-act="add-expense" data-cat="Marketing / ad spend">${ico('plus')}Ad spend</button>
+      <button class="btn sm" data-act="add-expense" data-cat="Platform commission">${ico('plus')}Platform commission</button>
+      <button class="btn sm" data-act="add-expense" data-cat="Equipment (capex)">${ico('plus')}Equipment (capex)</button></div>
+    <div class="grid cols">
+      <div class="card"><div class="toolbar"><input type="search" placeholder="Search expenses" value="${f.q}" data-filter="expenses.q" aria-label="Search expenses">
+        <select class="btn" data-filter="expenses.cat" aria-label="Category"><option value="all">All categories</option>${d.categories.map((c) => h`<option ${f.cat === c ? raw('selected') : ''}>${c}</option>`)}</select></div>
+        <div class="card-b"><div id="reg-expenses">${REGIONS.expenses()}</div></div></div>
+      <div class="card"><div class="card-h"><h2>By category</h2></div><div class="card-b"><div class="chart" data-chart="ex-cat"></div>
+        <div class="legend" style="justify-content:center">${cats.filter((c) => c.value > 0).map((c) => h`<span><i style="background:${c.color}"></i>${c.name}</span>`)}</div></div></div>
+    </div>`;
+};
+
+/* ---------- Refunds & Deductions ---------- */
+REGIONS.refunds = () => {
+  const r = range(), f = S.f.refunds;
+  let rows = S.data.deposits.filter((x) => (x.status === 'held' && f.st !== 'all') || inR(x.date, r) || x.status === 'held');
+  rows = S.data.deposits.filter((x) => inR(x.date, r) || x.status === 'held');
+  if (f.st !== 'all') rows = rows.filter((x) => x.status === f.st);
+  return table('dep', [
+    { k: 'date', label: 'Event', sort: (x) => x.date, f: (x) => fmtDate(x.date) },
+    { k: 'client', label: 'Client', sort: (x) => x.client.toLowerCase(), f: (x) => h`${x.client}${x.booking_no ? h`<span class="sub mono">${x.booking_no}</span>` : ''}` },
+    { k: 'dep', label: 'Deposit', r: 1, sort: (x) => x.collected, f: (x) => money(x.collected) },
+    { k: 'ref', label: 'Refunded', r: 1, sort: (x) => x.refunded, f: (x) => (x.refunded ? money(x.refunded) : '—') },
+    { k: 'ret', label: 'Kept (income)', r: 1, sort: (x) => x.retained, f: (x) => (x.retained ? h`<b>${money(x.retained)}</b>` : '—') },
+    { k: 'top', label: 'Top-up', r: 1, sort: (x) => x.topup, f: (x) => (x.topup ? money(x.topup) : '—') },
+    { k: 'st', label: 'Status', f: (x) => h`${pill(depText[x.status], depTone[x.status])}${x.unverified ? raw(' <span class="pill dash" data-tip="Marked refunded from memory, not a document">unverified</span>') : ''}${x.pending_deduction ? raw(` <span class="pill amber">${esc(money(x.pending_deduction))} pending</span>`) : ''}` },
+    { k: 'ev', label: 'Note', f: (x) => (x.evidence ? h`<span class="muted" data-tip="${x.evidence}">${x.evidence.length > 34 ? x.evidence.slice(0, 34) + '…' : x.evidence}</span>` : '') },
+  ], rows, { empty: emptyState('No deposits in this period', 'Deposits and their refund or deduction outcome are listed here.') });
+};
+PAGES.refunds = () => {
+  const r = range(), d = S.data, inRange = d.deposits.filter((x) => inR(x.date, r)), f = S.f.refunds;
+  const held = d.deposits.filter((x) => x.status === 'held');
+  const seg = [['all', 'All'], ['held', 'Held'], ['refunded', 'Refunded'], ['partial', 'Partly refunded'], ['forfeited', 'Forfeited']];
+  return h`${head('Refunds & Deductions', `${r.label} · a deposit is the client’s money`, cta('Record via Telegram', 'Refund a deposit', 'send', 'url', `data-url="https://t.me/${esc(d.business.telegram_bot)}"`))}
+    ${banner()}
+    <div class="grid kpis four">
+      ${kpi('Held right now', 'wallet', money(sumBy(held, (x) => x.collected)), held.length ? `${plural(held.length, 'deposit')} still to return` : 'Nothing held', held.length ? 'warn' : 'pos')}
+      ${kpi('Refunded', 'undo', money(sumBy(inRange, (x) => x.refunded)), `${plural(inRange.filter((x) => x.status === 'refunded').length, 'full refund')}`)}
+      ${kpi('Kept as income', 'check', money(sumBy(inRange, (x) => x.retained)), `${plural(inRange.filter((x) => x.retained > 0).length, 'deduction')} · damage / breach`, 'pos')}
+      ${kpi('Top-ups invoiced', 'file', money(sumBy(inRange, (x) => x.topup)), 'Billed after a forfeit — income')}
+    </div>
+    <div class="card"><div class="toolbar"><div class="seg" role="group" aria-label="Filter">${seg.map((s) => h`<button aria-pressed="${f.st === s[0]}" data-act="seg" data-f="refunds.st" data-v="${s[0]}">${s[1]}</button>`)}</div></div>
+      <div class="card-b"><div id="reg-refunds">${REGIONS.refunds()}</div></div></div>
+    <p class="muted" style="font-size:12.5px;margin:12px 4px">Refunds and deductions for invoice-app bookings are recorded from Telegram (e.g. <code class="mono">2026045 deduct 150 reason: stained sofa</code>, then <code class="mono">2026045 refunded</code>). Rows from the accounts workbook are shown as recorded there.</p>`;
+};
+
+/* ---------- Profit & Loss ---------- */
+PAGES.pnl = () => {
+  const r = range(), d = S.data, ms = monthsIn(r), t = totals(ms);
+  const margin = t.revenue > 0 && t.anyCosts ? Math.round((t.net / t.revenue) * 100) : null;
+  CHART_SPECS['pl-bars'] = { type: 'bars', aria: 'Revenue and costs by month', ...monthSpec(ms), series: [
+    { name: 'Revenue', color: ACCENT, values: ms.map((m) => m.revenue) }, { name: 'Costs', color: WARM, values: ms.map((m) => m.cost) }],
+    extraTip: (i) => (ms[i].costs_recorded ? `Net: ${money(ms[i].net)}` : 'Costs not recorded this month') };
+  const priced = d.bookings.filter((b) => b.counted && b.date <= d.today), avg = priced.length ? sumBy(priced, (b) => b.revenue) / priced.length : 0;
+  const fixed = [...d.months].reverse().find((m) => m.costs_recorded && m.cost > 0);
+  const capex = d.expenses.filter((e) => e.capex);
+  const cell = (m, k) => (m.costs_recorded ? money(m[k]) : '—');
+  return h`${head('Profit & Loss', `${r.label} · mirrors the Monthly P&L sheet`, cta('Export P&L', 'Download CSV', 'dl', 'csv', 'data-kind="pnl"'))}
+    ${banner()}
+    <div class="grid kpis four">
+      ${kpi('Revenue', 'trend', money(t.revenue), plural(t.bookings, 'booking'))}
+      ${kpi('Costs', 'wallet', t.anyCosts ? money(t.cost) : '—', t.anyCosts ? (t.incomplete ? 'Some months not tracked' : 'Excludes capex') : 'None recorded', t.incomplete || !t.anyCosts ? 'warn' : '')}
+      ${kpi('Net', 'pie', t.anyCosts ? money(t.net) : '—', t.incomplete ? 'Overstated — see below' : '', t.incomplete ? 'warn' : t.net >= 0 ? 'pos' : 'neg')}
+      ${kpi('Margin', 'bars', margin === null || t.incomplete ? '—' : margin + '%', margin === null || t.incomplete ? 'Needs costs for every month — try a recent period' : 'Net ÷ revenue', margin === null || t.incomplete ? 'warn' : '')}
+    </div>
+    <div class="grid cols">
+      <div class="card"><div class="card-h"><h2>Revenue vs costs</h2></div><div class="card-b"><div class="chart" data-chart="pl-bars"></div>
+        <div class="legend"><span><i style="background:var(--accent)"></i>Revenue</span><span><i style="background:var(--warm)"></i>Costs</span></div>${gapNote(ms)}</div></div>
+      <div class="card"><div class="card-h"><h2>Break-even</h2></div><div class="card-b">
+        ${fixed && avg ? h`<div class="kpi" style="padding:0;min-height:0"><div class="n">${Math.max(1, Math.ceil(fixed.cost / avg))} <span style="font:500 15px var(--sans)" class="muted">booking${Math.ceil(fixed.cost / avg) === 1 ? '' : 's'} / month</span></div></div>
+          <p class="muted" style="margin-top:8px">Recorded fixed costs are ${money(fixed.cost)} a month (${fmtMonth(fixed.month)}). At the average of ${money(avg)} per booking, that’s what covers them. Rent is nil, so the fixed cost base is very low.</p>`
+          : h`<p class="muted">Needs at least one month of recorded costs and one priced booking.</p>`}
+        <p class="muted" style="font-size:12px;margin-top:10px">Based only on costs written down — platform commission and ad spend aren’t recorded yet.</p></div></div>
+    </div>
+    <div class="card"><div class="card-h"><h2>Monthly P&L</h2><span class="label">same columns as expenses-2026.xlsx</span></div><div class="card-b">
+      ${table('pl', [
+        { k: 'm', label: 'Month', f: (m) => h`<b>${fmtMonth(m.month)}</b>` },
+        { k: 'b', label: 'Bookings', r: 1, f: (m) => h`${m.bookings}${m.unpriced ? raw(` <span class="pill amber" data-tip="${esc(m.unpriced + ' without amounts')}">${m.unpriced}?</span>`) : ''}` },
+        { k: 'rent', label: 'Rental', r: 1, f: (m) => money(m.rental) }, { k: 'cl', label: 'Cleaning', r: 1, f: (m) => money(m.cleaning) }, { k: 'tu', label: 'Top-ups / other', r: 1, f: (m) => money(m.topups) },
+        { k: 'rev', label: 'Revenue', r: 1, f: (m) => h`<b>${money(m.revenue)}</b>` },
+        { k: 'ut', label: 'Utilities', r: 1, f: (m) => cell(m, 'utilities') }, { k: 'cc', label: 'Contractor', r: 1, f: (m) => cell(m, 'contractor') }, { k: 'co', label: 'Consumables', r: 1, f: (m) => cell(m, 'consumables') },
+        { k: 'ad', label: 'Ads', r: 1, f: (m) => cell(m, 'ads') }, { k: 'pf', label: 'Platform', r: 1, f: (m) => cell(m, 'platform') }, { k: 'ot', label: 'Other', r: 1, f: (m) => cell(m, 'other') },
+        { k: 'cost', label: 'Costs', r: 1, f: (m) => (m.costs_recorded ? h`<b>${money(m.cost)}</b>${m.estimated ? raw(' <span class="pill amber">est.</span>') : ''}` : raw('<span class="pill dash" data-tip="No costs were written down for this month">not tracked</span>')) },
+        { k: 'net', label: 'Net', r: 1, f: (m) => (m.costs_recorded ? h`<b style="color:var(${m.net >= 0 ? '--pos' : '--neg'})">${money(m.net)}</b>` : h`<span class="muted" data-tip="Overstated: costs weren’t tracked, so this is just revenue">${money(m.net)}*</span>`) },
+      ], ms.slice().reverse(), { cls: 'sticky1', foot: h`<tr><td>Total</td><td class="r">${t.bookings}</td><td class="r">${money(t.rental)}</td><td class="r">${money(t.cleaning)}</td><td class="r">${money(t.topups)}</td><td class="r">${money(t.revenue)}</td><td class="r">${money(t.utilities)}</td><td class="r">${money(t.contractor)}</td><td class="r">${money(t.consumables)}</td><td class="r">${money(t.ads)}</td><td class="r">${money(t.platform)}</td><td class="r">${money(t.other)}</td><td class="r">${money(t.cost)}</td><td class="r">${money(t.net)}${t.incomplete ? '*' : ''}</td></tr>` })}
+      <p class="muted" style="font-size:12.5px;margin-top:12px">* Months marked “not tracked” have no costs on record, so their net is overstated (utilities before Nov 2026 were never written down and can’t be rebuilt). “Top-ups / other” includes pet fees, overtime, <b>forfeited deposits</b> and top-ups billed after a forfeit. A “?” means confirmed bookings without recorded amounts.</p></div></div>
+    ${accordion('acc-capex', 'Equipment (capex) — kept out of the monthly P&L', capex.length ? money(d.summary.capex_total) : 'not loaded', capex.length ? table('cap', [
+      { k: 'd', label: 'Date', f: (e) => fmtDate(e.date) }, { k: 'x', label: 'Item', f: (e) => e.description }, { k: 'a', label: 'Amount', r: 1, f: (e) => money(e.amount) }], capex)
+      : h`<p class="muted">The 2025 setup — pool table, karaoke, arcade, chairs — is capital spend, not a monthly cost. Its receipts are in 02_Finance/purchases-receipts, but the amounts actually paid aren’t reliably recorded, so nothing is guessed here. Log them under Expenses → <i>Equipment (capex)</i> and payback can be shown.</p>`)}`;
+};

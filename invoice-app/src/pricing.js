@@ -81,7 +81,8 @@ export const PET_CLEANING_FEE = 100; // optional, added on top when the pet chec
 // once officially finalized closer to the date — the 2027 pair (10 Mar, 17
 // May) is still provisional as of this writing (2026-08-02); re-check MOM
 // nearer the time if a booking lands right on one of those two dates.
-const SG_PUBLIC_HOLIDAYS = new Set([
+// Exported (2026-11-18) so the dashboard's booking calendar can mark public holidays.
+export const SG_PUBLIC_HOLIDAYS = new Set([
   // 2026 (final)
   "2026-01-01", // New Year's Day
   "2026-02-17", "2026-02-18", // Chinese New Year

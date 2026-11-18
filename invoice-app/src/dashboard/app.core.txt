@@ -1,0 +1,314 @@
+'use strict';
+/* ==========================================================================
+   Dashboard client — core. (Concatenated with app.charts.txt + app.pages.txt into
+   one script by dashboard.js.) No framework, no build step, no dependencies.
+   ========================================================================== */
+
+/* ---------- html helpers: the h`` tag escapes every interpolation unless it is
+   already Safe, so client names / notes can never inject markup ---------- */
+class Safe { constructor(s) { this.s = String(s); } toString() { return this.s; } }
+const raw = (s) => new Safe(s);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const cat = (v) => (v instanceof Safe ? v.s : Array.isArray(v) ? v.map(cat).join('') : esc(v));
+const h = (strings, ...vals) => { let out = strings[0]; for (let i = 0; i < vals.length; i++) out += cat(vals[i]) + strings[i + 1]; return new Safe(out); };
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+
+const nf0 = new Intl.NumberFormat('en-SG', { style: 'currency', currency: 'SGD', maximumFractionDigits: 0 });
+const nf2 = new Intl.NumberFormat('en-SG', { style: 'currency', currency: 'SGD', minimumFractionDigits: 2 });
+const money = (n) => { n = Number(n) || 0; return (Math.abs(n % 1) > 0.004 ? nf2 : nf0).format(n); };
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const fmtDate = (d) => (d ? `${+d.slice(8, 10)} ${MONTHS[+d.slice(5, 7) - 1]} ${d.slice(0, 4)}` : '—');
+const fmtShort = (d) => (d ? `${+d.slice(8, 10)} ${MONTHS[+d.slice(5, 7) - 1]}` : '—');
+const fmtMonth = (m) => `${MONTHS[+m.slice(5, 7) - 1]} ${m.slice(0, 4)}`;
+const fmtMon = (m) => MONTHS[+m.slice(5, 7) - 1];
+const daysBetween = (a, b) => Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 86400000);
+const sumBy = (arr, f) => arr.reduce((s, x) => s + (Number(f(x)) || 0), 0);
+const r2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+const plural = (n, a, b) => `${n} ${n === 1 ? a : b || a + 's'}`;
+const agoText = (iso) => { const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000); return s < 50 ? 'just now' : s < 3300 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`; };
+
+/* ---------- icons (24px stroke set) ---------- */
+const ICONS = {
+  grid: '<rect x="3" y="3" width="7" height="7" rx="1.6"/><rect x="14" y="3" width="7" height="7" rx="1.6"/><rect x="3" y="14" width="7" height="7" rx="1.6"/><rect x="14" y="14" width="7" height="7" rx="1.6"/>',
+  trend: '<path d="m3 17 6-6 4 4 8-8"/><path d="M15 7h6v6"/>',
+  file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/>',
+  wallet: '<path d="M3 7a2 2 0 0 1 2-2h13v4"/><path d="M3 7v11a2 2 0 0 0 2 2h14a1 1 0 0 0 1-1v-9a1 1 0 0 0-1-1H5a2 2 0 0 1-2-2z"/><circle cx="16.5" cy="14.5" r="1"/>',
+  undo: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>',
+  pie: '<path d="M21 12A9 9 0 1 1 12 3v9z"/><path d="M15.5 3.6A9 9 0 0 1 20.4 8.5H15.5z"/>',
+  users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-3.5 3-6 6.5-6s6.5 2.5 6.5 6"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8M21.5 20c0-2.8-1.7-5-4-5.7"/>',
+  cal: '<rect x="3" y="4" width="18" height="17" rx="2.2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+  bars: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
+  sliders: '<path d="M4 6h8M18 6h2M4 12h2M10 12h10M4 18h12M20 18h0"/><circle cx="15" cy="6" r="2.2"/><circle cx="8" cy="12" r="2.2"/><circle cx="18" cy="18" r="2.2"/>',
+  help: '<circle cx="12" cy="12" r="9"/><path d="M9.6 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.4-1.1 1-1.1 1.7M12 17h.01"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  chev: '<path d="m9 6 6 6-6 6"/>',
+  send: '<path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/>',
+  dl: '<path d="M12 3v12m0 0 4-4m-4 4-4-4M4 21h16"/>',
+  check: '<path d="m5 12 5 5 9-10"/>',
+  alert: '<circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16.5h.01"/>',
+  cmd: '<path d="M9 9V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3z"/>',
+  ext: '<path d="M14 4h6v6M20 4 10 14M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
+  trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
+  moon: '<path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5z"/>',
+  refresh: '<path d="M20 11a8 8 0 0 0-14.5-4M4 4v4h4M4 13a8 8 0 0 0 14.5 4M20 20v-4h-4"/>',
+  wa: '<path d="M21 12a8.5 8.5 0 0 1-12.6 7.4L3 21l1.7-5.2A8.5 8.5 0 1 1 21 12z"/>',
+  print: '<path d="M7 9V3h10v6M7 17H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2"/><rect x="7" y="14" width="10" height="7"/>',
+  menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
+  edit: '<path d="M4 20h4L19 9a2.1 2.1 0 0 0-4-4L4 16z"/>',
+};
+const ico = (name, cls = '') => raw(`<svg class="i ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`);
+
+/* ---------- state ---------- */
+const store = { get: (k, d) => { try { return localStorage.getItem(k) ?? d; } catch (e) { return d; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* private mode */ } }, del: (k) => { try { localStorage.removeItem(k); } catch (e) { /* ignore */ } } };
+const S = {
+  key: store.get('bojioAdminKey', ''), data: null, route: 'overview', period: store.get('bojioDashPeriod', '12m'),
+  custom: { from: '', to: '' }, theme: store.get('bojioDashTheme', 'light'),
+  f: { invoices: { q: '', pay: 'all' }, expenses: { q: '', cat: 'all' }, clients: { q: '' }, revenue: { month: '' }, refunds: { st: 'all' } },
+  sort: {}, cal: null, loadedAt: 0, loading: false,
+};
+const ACT = {};                       // click actions, filled in by app.pages.txt
+const PAGES = {};                     // page renderers, filled in by app.pages.txt
+
+const ROUTES = [
+  { id: 'overview', label: 'Overview', icon: 'grid', title: 'Overview', period: true },
+  { id: 'revenue', label: 'Revenue', icon: 'trend', group: 'Money', title: 'Revenue', period: true },
+  { id: 'invoices', label: 'Invoices', icon: 'file', group: 'Money', title: 'Invoices' },
+  { id: 'expenses', label: 'Expenses', icon: 'wallet', group: 'Money', title: 'Expenses', period: true },
+  { id: 'refunds', label: 'Refunds & Deductions', icon: 'undo', group: 'Money', title: 'Refunds & Deductions', period: true },
+  { id: 'pnl', label: 'Profit & Loss', icon: 'pie', group: 'Money', title: 'Profit & Loss', period: true },
+  { id: 'clients', label: 'Clients', icon: 'users', group: 'Venue', title: 'Clients' },
+  { id: 'calendar', label: 'Booking Calendar', icon: 'cal', group: 'Venue', title: 'Confirmed Booking Calendar' },
+  { id: 'reports', label: 'Reports', icon: 'bars', group: 'Insights', title: 'Reports', period: true },
+  { id: 'settings', label: 'Settings', icon: 'sliders', foot: true, title: 'Settings' },
+  { id: 'help', label: 'Help', icon: 'help', foot: true, title: 'Help' },
+];
+const PERIODS = [['this', 'This month'], ['last', 'Last month'], ['3m', 'Last 3 months'], ['12m', 'Last 12 months'], ['ytd', 'This year'], ['all', 'All time'], ['custom', 'Custom range']];
+
+/* ---------- API ---------- */
+async function api(path, opts = {}) {
+  const r = await fetch('/api/dashboard/' + path, { ...opts, headers: { Authorization: 'Bearer ' + S.key, 'Content-Type': 'application/json', ...(opts.headers || {}) } });
+  if (r.status === 401) { signOut('Wrong key, or your session expired. Enter it again.'); throw new Error('unauthorized'); }
+  const text = await r.text();
+  let j = {}; try { j = JSON.parse(text); } catch (e) { /* csv etc. */ }
+  if (!r.ok) throw new Error(j.error || `Something went wrong (${r.status}).`);
+  return opts.raw ? text : j;
+}
+async function downloadCsv(kind, label) {
+  try {
+    const text = await api('export/' + kind, { raw: true });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }));
+    a.download = `bojiovenue-${label || kind}-${S.data.today}.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    toast('Downloaded ' + a.download);
+  } catch (e) { toast(e.message, true); }
+}
+
+/* ---------- period maths ---------- */
+const monthAdd = (m, k) => { let y = +m.slice(0, 4), mo = +m.slice(5, 7) - 1 + k; y += Math.floor(mo / 12); mo = ((mo % 12) + 12) % 12; return `${y}-${String(mo + 1).padStart(2, '0')}`; };
+const lastDay = (m) => new Date(Date.UTC(+m.slice(0, 4), +m.slice(5, 7), 0)).toISOString().slice(0, 10);
+function range() {
+  const t = S.data.today, cm = t.slice(0, 7), first = S.data.months.length ? S.data.months[0].month : cm;
+  const label = (PERIODS.find((p) => p[0] === S.period) || [0, ''])[1];
+  switch (S.period) {
+    case 'this': return { from: cm + '-01', to: t, label };
+    case 'last': return { from: monthAdd(cm, -1) + '-01', to: lastDay(monthAdd(cm, -1)), label };
+    case '3m': return { from: monthAdd(cm, -2) + '-01', to: t, label };
+    case 'ytd': return { from: t.slice(0, 4) + '-01-01', to: t, label };
+    case 'all': return { from: first + '-01', to: t, label };
+    case 'custom': return { from: S.custom.from || first + '-01', to: S.custom.to || t, label: `${fmtDate(S.custom.from || first + '-01')} – ${fmtDate(S.custom.to || t)}` };
+    default: return { from: monthAdd(cm, -11) + '-01', to: t, label: 'Last 12 months' };
+  }
+}
+const inR = (d, r) => d >= r.from && d <= r.to;
+const monthsIn = (r) => S.data.months.filter((m) => m.month >= r.from.slice(0, 7) && m.month <= r.to.slice(0, 7));
+function totals(ms) {
+  const t = { bookings: 0, priced: 0, unpriced: 0, rental: 0, cleaning: 0, topups: 0, retained: 0, revenue: 0, cost: 0, net: 0, utilities: 0, contractor: 0, consumables: 0, ads: 0, platform: 0, other: 0 };
+  for (const m of ms) for (const k in t) t[k] += m[k] || 0;
+  for (const k in t) t[k] = r2(t[k]);
+  t.incomplete = ms.some((m) => !m.costs_recorded && m.revenue > 0);
+  t.anyCosts = ms.some((m) => m.costs_recorded);
+  return t;
+}
+
+/* ---------- data load, sign-in ---------- */
+function showLogin(msg) { $('#app').hidden = true; $('#login').hidden = false; if (msg) $('#loginMsg').textContent = msg; setTimeout(() => $('#loginKey').focus(), 0); }
+function signOut(msg) { store.del('bojioAdminKey'); S.key = ''; S.data = null; $('#loginKey').value = ''; showLogin(msg); }
+async function load(quiet) {
+  if (S.loading) return; S.loading = true;
+  try {
+    S.data = await api('data'); S.loadedAt = Date.now();
+    $('#login').hidden = true; $('#app').hidden = false;
+    if (!S.cal) { const t = S.data.today; S.cal = { y: +t.slice(0, 4), m: +t.slice(5, 7) }; }
+    if (quiet) { renderChrome(); renderPage(); } else route();   // a quiet refresh keeps your scroll position
+  } catch (e) { if (e.message !== 'unauthorized') { if (S.data) toast(e.message, true); else showLogin('Could not load: ' + e.message); } }
+  finally { S.loading = false; }
+}
+$('#loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault(); const k = $('#loginKey').value.trim(); if (!k) return;
+  S.key = k; $('#loginMsg').textContent = 'Checking…'; await load();
+  if (S.data) store.set('bojioAdminKey', S.key);
+});
+
+/* ---------- chrome: sidebar + top bar ---------- */
+function owedCount() { return S.data.bookings.filter((b) => b.counted && b.outstanding > 0 && b.source === 'app').length; }
+function overdueRefunds() { return S.data.health.find((x) => x.id === 'refund_overdue'); }
+function renderChrome() {
+  const r = ROUTES.find((x) => x.id === S.route);
+  const badge = (id) => { const n = id === 'invoices' ? owedCount() : id === 'refunds' ? (overdueRefunds() || {}).count || 0 : 0; return n ? raw(`<span class="count">${n}</span>`) : ''; };
+  const link = (x) => h`<a href="#/${x.id}" ${S.route === x.id ? raw('aria-current="page"') : ''}>${ico(x.icon)}<span>${x.label}</span>${badge(x.id)}</a>`;
+  let last = null, navHtml = '';
+  for (const x of ROUTES.filter((y) => !y.foot)) {
+    if (x.group && x.group !== last) { navHtml += `<div class="nav-group label">${esc(x.group)}</div>`; last = x.group; }
+    navHtml += link(x).s;
+  }
+  $('#side').innerHTML = h`<div class="brand"><div class="brand-tile">B</div><div class="name">BoJioVenue</div></div>
+    <nav class="nav">${raw(navHtml)}</nav>
+    <nav class="nav nav-foot">${ROUTES.filter((x) => x.foot).map(link)}</nav>`.s;
+
+  const periodSel = r && r.period ? h`<select class="btn" id="periodSel" aria-label="Period">${PERIODS.map((p) => h`<option value="${p[0]}" ${S.period === p[0] ? raw('selected') : ''}>${p[1]}</option>`)}</select>
+      ${S.period === 'custom' ? h`<input class="btn sm" type="date" id="cFrom" value="${S.custom.from}" aria-label="From"><input class="btn sm" type="date" id="cTo" value="${S.custom.to}" aria-label="To">` : ''}` : '';
+  $('#top').innerHTML = h`<button class="btn btn-icon ghost menu-btn" data-act="nav-toggle" aria-label="Menu">${ico('menu')}</button>
+    <button class="search" data-act="palette" aria-label="Search or jump to">${ico('search')}<span>Search or jump to…</span><kbd>⌘K</kbd></button>
+    <span class="sp"></span>${periodSel}
+    <button class="btn btn-icon ghost" data-act="refresh" data-tip="Refresh data" aria-label="Refresh">${ico('refresh')}</button>
+    <button class="btn btn-icon ghost" data-act="theme" data-tip="Switch light / glass" aria-label="Theme">${ico('moon')}</button>`.s;
+  document.title = `${r ? r.title : 'Dashboard'} · BoJioVenue`;
+}
+function renderPage() {
+  if (!S.data) return;
+  const fn = PAGES[S.route] || PAGES.overview;
+  $('#main').innerHTML = fn().s;
+  afterRender();
+}
+function afterRender() { drawCharts(); }
+function route() {
+  const id = (location.hash.match(/^#\/(\w+)/) || [])[1] || 'overview';
+  S.route = ROUTES.some((x) => x.id === id) ? id : 'overview';
+  renderChrome(); renderPage(); window.scrollTo(0, 0);
+  document.body.classList.remove('nav-open');
+}
+window.addEventListener('hashchange', route);
+window.addEventListener('scroll', () => { const t = $('#top'); if (t) t.classList.toggle('scrolled', window.scrollY > 6); }, { passive: true });
+let rz; window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (S.data) drawCharts(); }, 150); });
+
+/* ---------- theme ---------- */
+function applyTheme() { document.documentElement.dataset.theme = S.theme; store.set('bojioDashTheme', S.theme); }
+applyTheme();
+
+/* ---------- overlays ---------- */
+let lastFocus = null;
+function closeOverlay() { $('#overlay-root').innerHTML = ''; if (lastFocus && lastFocus.focus) lastFocus.focus(); lastFocus = null; }
+function openDrawer({ title, body, footer, onMount }) {
+  lastFocus = document.activeElement;
+  $('#overlay-root').innerHTML = h`<div class="veil" data-veil><aside class="drawer" role="dialog" aria-modal="true" aria-label="${title}">
+    <div class="drawer-h"><h2>${title}</h2><button class="btn btn-icon ghost" data-act="close" aria-label="Close">${ico('x')}</button></div>
+    <div class="drawer-b">${body}</div>${footer ? h`<div class="drawer-f">${footer}</div>` : ''}</aside></div>`.s;
+  const first = $('#overlay-root input, #overlay-root select, #overlay-root textarea');
+  if (first) first.focus(); else $('#overlay-root .drawer').focus();
+  if (onMount) onMount($('#overlay-root'));
+}
+function toast(msg, bad) {
+  const el = document.createElement('div'); el.className = 'toast' + (bad ? ' bad' : ''); el.textContent = msg;
+  $('#toast-root').appendChild(el); setTimeout(() => el.remove(), 3000);
+}
+
+/* ---------- tooltips ---------- */
+const tip = $('#tip');
+document.addEventListener('mouseover', (e) => {
+  const el = e.target.closest('[data-tip]'); if (!el) return;
+  tip.textContent = el.dataset.tip; const b = el.getBoundingClientRect(); tip.classList.add('on');
+  const tw = tip.offsetWidth; let x = e.clientX || b.left + b.width / 2; x = Math.min(Math.max(8, x - tw / 2), innerWidth - tw - 8);
+  tip.style.left = x + 'px'; tip.style.top = Math.max(8, (el.closest('.chart') ? e.clientY - 46 : b.top - 38)) + 'px';
+});
+document.addEventListener('mousemove', (e) => {
+  if (!tip.classList.contains('on')) return; const el = e.target.closest('.chart [data-tip]'); if (!el) return;
+  const tw = tip.offsetWidth; tip.style.left = Math.min(Math.max(8, e.clientX - tw / 2), innerWidth - tw - 8) + 'px'; tip.style.top = Math.max(8, e.clientY - 46) + 'px';
+});
+document.addEventListener('mouseout', (e) => { if (e.target.closest('[data-tip]')) tip.classList.remove('on'); });
+
+/* ---------- global click / input wiring ---------- */
+document.addEventListener('click', (e) => {
+  if (e.target.matches('[data-veil]')) { closeOverlay(); return; }
+  const el = e.target.closest('[data-act]'); if (!el) return;
+  const fn = ACT[el.dataset.act]; if (fn) { if (el.tagName === 'A' && !el.dataset.native) e.preventDefault(); fn(el, e); }
+});
+document.addEventListener('change', (e) => {
+  if (e.target.id === 'periodSel') { S.period = e.target.value; store.set('bojioDashPeriod', S.period); if (S.period === 'custom' && !S.custom.from) { S.custom = { from: range().from, to: S.data.today }; } renderChrome(); renderPage(); }
+  else if (e.target.id === 'cFrom' || e.target.id === 'cTo') { S.custom[e.target.id === 'cFrom' ? 'from' : 'to'] = e.target.value; renderPage(); }
+  else if (e.target.dataset && e.target.dataset.filter) ACT.filter(e.target);
+});
+document.addEventListener('input', (e) => { if (e.target.dataset && e.target.dataset.filter && e.target.type === 'search') ACT.filter(e.target); });
+
+/* ---------- ⌘K palette ---------- */
+function fuzzy(q, text) {
+  q = q.toLowerCase(); text = text.toLowerCase(); if (!q) return 1;
+  if (text.startsWith(q)) return 100 - text.length; const at = text.indexOf(q); if (at >= 0) return 60 - at;
+  let i = 0; for (const c of text) if (c === q[i]) i++; return i === q.length ? 10 : 0;
+}
+function paletteItems() {
+  const d = S.data, items = [];
+  items.push({ g: 'Quick actions', label: 'Add expense', icon: 'plus', k: 'E', run: () => ACT['add-expense']() });
+  items.push({ g: 'Quick actions', label: 'Record booking', icon: 'file', k: 'B', run: () => ACT['add-booking']() });
+  if (d.summary.to_collect > 0) items.push({ g: 'Quick actions', label: `Collect ${money(d.summary.to_collect)} (who owes)`, icon: 'send', k: 'C', run: () => ACT.collect() });
+  items.push({ g: 'Quick actions', label: 'Print this month’s report', icon: 'print', k: 'P', run: () => { S.period = 'this'; location.hash = '#/reports'; setTimeout(() => window.print(), 250); } });
+  items.push({ g: 'Quick actions', label: 'Download P&L (CSV)', icon: 'dl', run: () => downloadCsv('pnl', 'pnl') });
+  items.push({ g: 'Quick actions', label: 'Download bookings (CSV)', icon: 'dl', run: () => downloadCsv('bookings', 'bookings') });
+  items.push({ g: 'Quick actions', label: 'Open the Telegram bot', icon: 'send', run: () => window.open('https://t.me/' + d.business.telegram_bot, '_blank', 'noopener') });
+  items.push({ g: 'Quick actions', label: S.theme === 'glass' ? 'Switch to light theme' : 'Switch to frosted-glass theme', icon: 'moon', run: () => ACT.theme() });
+  for (const r of ROUTES) items.push({ g: 'Go to', label: r.title === r.label ? r.label : r.label, icon: r.icon, run: () => { location.hash = '#/' + r.id; } });
+  items.push({ g: 'Go to', label: 'Invoice admin (create / edit bookings)', icon: 'ext', run: () => window.open('/admin', '_blank', 'noopener') });
+  items.push({ g: 'Go to', label: 'Website traffic dashboard', icon: 'ext', run: () => window.open('https://go.bojiovenue.com/admin', '_blank', 'noopener') });
+  items.push({ g: 'Session', label: 'Sign out', icon: 'logout', run: () => signOut('Signed out.') });
+  for (const c of d.clients) items.push({ g: 'Clients', label: c.name, icon: 'users', hint: true, run: () => ACT['client-open']({ dataset: { name: c.name } }) });
+  return items;
+}
+function openPalette() {
+  if (!S.data) return;
+  lastFocus = document.activeElement;
+  const all = paletteItems(); let sel = 0, shown = [];
+  $('#overlay-root').innerHTML = h`<div class="veil center" data-veil><div class="palette" role="dialog" aria-modal="true" aria-label="Command palette">
+    <div class="q">${ico('search')}<input id="pq" placeholder="Type a command or search…" autocomplete="off" aria-label="Command"><kbd>esc</kbd></div><div class="res" id="pres"></div></div></div>`.s;
+  const input = $('#pq'), res = $('#pres');
+  function paint() {
+    const q = input.value.trim();
+    shown = all.map((it) => ({ it, s: fuzzy(q, it.label) })).filter((x) => x.s > 0 && (q || !it0(x.it))).sort((a, b) => b.s - a.s).slice(0, 14).map((x) => x.it);
+    if (!q) shown = all.filter((x) => !x.hint).slice(0, 12);
+    sel = Math.min(sel, Math.max(0, shown.length - 1));
+    let g = null, out = '';
+    shown.forEach((it, i) => { if (it.g !== g) { out += `<div class="sec label">${esc(it.g)}</div>`; g = it.g; } out += h`<button class="row" role="option" data-i="${i}" aria-selected="${i === sel}">${ico(it.icon)}<span>${it.label}</span>${it.k ? h`<kbd>${it.k}</kbd>` : ''}</button>`.s; });
+    res.innerHTML = out || '<div class="empty">Nothing matches.</div>';
+  }
+  const it0 = (it) => !!it.hint;
+  const run = (i) => { const it = shown[i]; if (!it) return; closeOverlay(); lastFocus = null; setTimeout(it.run, 0); };
+  input.addEventListener('input', () => { sel = 0; paint(); });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') { sel = Math.min(shown.length - 1, sel + 1); paint(); e.preventDefault(); }
+    else if (e.key === 'ArrowUp') { sel = Math.max(0, sel - 1); paint(); e.preventDefault(); }
+    else if (e.key === 'Enter') { run(sel); e.preventDefault(); }
+  });
+  res.addEventListener('click', (e) => { const b = e.target.closest('.row'); if (b) run(+b.dataset.i); });
+  res.addEventListener('mousemove', (e) => { const b = e.target.closest('.row'); if (b && +b.dataset.i !== sel) { sel = +b.dataset.i; $$('.row', res).forEach((r, i) => r.setAttribute('aria-selected', i === sel)); } });
+  paint(); input.focus();
+}
+
+/* ---------- keyboard ---------- */
+document.addEventListener('keydown', (e) => {
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target || {}).tagName || '');
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); if ($('#pq')) closeOverlay(); else openPalette(); return; }
+  if (e.key === 'Escape' && $('#overlay-root').firstChild) { closeOverlay(); return; }
+  if (typing || e.metaKey || e.ctrlKey || e.altKey || !S.data || $('#overlay-root').firstChild) return;
+  const k = e.key.toLowerCase();
+  if (k === '/') { e.preventDefault(); openPalette(); }
+  else if (k === 'e') ACT['add-expense']();
+  else if (k === 'b') ACT['add-booking']();
+  else if (k === 'c' && S.data.summary.to_collect > 0) ACT.collect();
+});
+
+/* ---------- boot ---------- */
+setTimeout(() => { if (S.key) load(); else showLogin(); }, 0);   // after the chart/page modules have registered
