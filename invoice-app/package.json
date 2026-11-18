@@ -9,7 +9,7 @@
     "dev": "wrangler dev",
     "deploy": "npm run db:init && wrangler deploy",
     "db:create": "wrangler d1 create bojiovenue-invoice",
-    "db:init": "wrangler d1 execute bojiovenue-invoice --remote --file=./schema.sql",
+    "db:init": "wrangler d1 execute bojiovenue-invoice --remote --yes --file=./schema.sql",
     "db:init:local": "wrangler d1 execute bojiovenue-invoice --local --file=./schema.sql"
   },
   "dependencies": {
